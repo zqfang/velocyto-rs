@@ -1,0 +1,65 @@
+[package]
+name = "velocyto-rs"
+version = "0.1.0"
+edition = "2021"
+description = "Faithful Rust translation of velocyto.py v0.17.16 — RNA velocity analysis for single-cell RNA-seq"
+license = "BSD-2-Clause"
+authors = ["Linnarsson Lab"]
+
+[[bin]]
+name = "velocyto-rs"
+path = "src/main.rs"
+
+[lib]
+name = "velocyto"
+path = "src/lib.rs"
+
+[dependencies]
+# HDF5 / loom I/O — pure Rust, no C library
+hdf5-pure-rust = { path = "hdf5-pure-rs" }
+# BAM/SAM reading (wraps htslib)
+rust-htslib = { version = "0.47", optional = true }
+# N-dimensional arrays
+ndarray = { version = "0.15", features = ["rayon"] }
+# Sparse matrices
+sprs = "0.11"
+# Statistical distributions
+statrs = "0.17"
+# Optimization (slope fitting)
+argmin = "0.10"
+argmin-math = { version = "0.4", features = ["ndarray_v0_15-nolinalg"] }
+# ML — PCA, KNN
+linfa = "0.7"
+linfa-reduction = "0.7"
+linfa-nn = "0.7"
+# Parallelism (replaces Cython OpenMP + numba)
+rayon = "1"
+# CLI
+clap = { version = "4", features = ["derive"] }
+# Logging
+log = "0.4"
+env_logger = "0.11"
+# Compression (for serialization)
+flate2 = "1"
+# Errors
+thiserror = "2"
+anyhow = "1"
+# Regex (for GTF parsing in counter.rs)
+regex = "1"
+# Random number generation (for placeholder UMI)
+rand = "0.8"
+# Compile-time hash maps (for GEM_codes, CIGAR)
+phf = { version = "0.11", features = ["macros"] }
+
+[features]
+bam = ["dep:rust-htslib"]
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.dev]
+opt-level = 0
+
+[profile.release]
+lto = "thin"
+debug = true

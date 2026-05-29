@@ -1,13 +1,15 @@
 # velocyto-rs
 
-> 🙏 **Heartfelt thanks to Prof. Johan Henriksson ([@mahogny](https://github.com/mahogny))** for the original software translation work that made this project possible. Your contribution and inspiration are deeply appreciated!
-
-
 Faithful Rust translation of [velocyto.py](https://github.com/velocyto-team/velocyto.py) v0.17.16 — RNA velocity analysis for single-cell RNA-seq data.
 
 **Reference snapshot**: velocyto.py v0.17.16 (no git hash available — copied source snapshot).  
 **Translation approach**: bottom-up, one Rust function per Python function, source files mirror Python module names.  
-**Status**: scaffold (stubs). See `order.csv` for implementation progress.
+
+## Why
+BD Rhapsody single-cell RNA-seq data uses a non-standard, complex cell barcode scheme, which makes it difficult to match cell barcodes between STARsolo output and the BD Rhapsody™ Sequence Analysis Pipeline output. [velocyto.py](https://github.com/velocyto-team/velocyto.py) remains the most straightforward approach for generating spliced and unspliced count matrices required for RNA velocity analysis; however, the project has been unmaintained since June 2019. This project provides a modern, actively maintained, and high-performance Rust reimplementation capable of processing BD Rhapsody BAM files to produce the necessary count matrices.
+
+> 🙏 **Heartfelt thanks to Prof. Johan Henriksson ([@mahogny](https://github.com/mahogny))** for the original software translation work that made this project possible. Your contribution and inspiration are deeply appreciated!
+
 
 ## Citation
 

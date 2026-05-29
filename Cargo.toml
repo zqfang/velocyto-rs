@@ -16,7 +16,7 @@ path = "src/lib.rs"
 
 [dependencies]
 # HDF5 / loom I/O — pure Rust, no C library
-hdf5-pure-rust = { path = "hdf5-pure-rs" }
+hdf5-pure-rust = { git = "https://github.com/henriksson-lab/hdf5-pure-rs.git" }
 # BAM/SAM reading (wraps htslib)
 rust-htslib = { version = "0.47", optional = true }
 # N-dimensional arrays

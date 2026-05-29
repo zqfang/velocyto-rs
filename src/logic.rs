@@ -31,7 +31,7 @@ pub trait Logic: Send + Sync {
         &self,
         molitem: &Molitem,
         cell_bcidx: usize,
-        dict_layers_columns: &mut HashMap<String, Array2<u16>>,
+        dict_layers_columns: &mut HashMap<String, Array2<u32>>,
         geneid2ix: &HashMap<String, usize>,
         tms: &[TranscriptModel],
     ) -> Option<i32>;
@@ -54,7 +54,7 @@ impl Logic for Permissive10X {
         &self,
         molitem: &Molitem,
         cell_bcidx: usize,
-        dict_layers_columns: &mut HashMap<String, Array2<u16>>,
+        dict_layers_columns: &mut HashMap<String, Array2<u32>>,
         geneid2ix: &HashMap<String, usize>,
         tms: &[TranscriptModel],
     ) -> Option<i32> {
@@ -246,7 +246,7 @@ impl Logic for Intermediate10X {
         &self,
         molitem: &Molitem,
         cell_bcidx: usize,
-        dict_layers_columns: &mut HashMap<String, Array2<u16>>,
+        dict_layers_columns: &mut HashMap<String, Array2<u32>>,
         geneid2ix: &HashMap<String, usize>,
         tms: &[TranscriptModel],
     ) -> Option<i32> {
@@ -442,7 +442,7 @@ impl Logic for ValidatedIntrons10X {
         &self,
         molitem: &Molitem,
         cell_bcidx: usize,
-        dict_layers_columns: &mut HashMap<String, Array2<u16>>,
+        dict_layers_columns: &mut HashMap<String, Array2<u32>>,
         geneid2ix: &HashMap<String, usize>,
         tms: &[TranscriptModel],
     ) -> Option<i32> {
@@ -630,7 +630,7 @@ impl Logic for Stricter10X {
         &self,
         molitem: &Molitem,
         cell_bcidx: usize,
-        dict_layers_columns: &mut HashMap<String, Array2<u16>>,
+        dict_layers_columns: &mut HashMap<String, Array2<u32>>,
         geneid2ix: &HashMap<String, usize>,
         tms: &[TranscriptModel],
     ) -> Option<i32> {
@@ -825,7 +825,7 @@ impl Logic for ObservedSpanning10X {
         &self,
         molitem: &Molitem,
         cell_bcidx: usize,
-        dict_layers_columns: &mut HashMap<String, Array2<u16>>,
+        dict_layers_columns: &mut HashMap<String, Array2<u32>>,
         geneid2ix: &HashMap<String, usize>,
         tms: &[TranscriptModel],
     ) -> Option<i32> {
@@ -1015,7 +1015,7 @@ impl Logic for Discordant10X {
         &self,
         molitem: &Molitem,
         cell_bcidx: usize,
-        dict_layers_columns: &mut HashMap<String, Array2<u16>>,
+        dict_layers_columns: &mut HashMap<String, Array2<u32>>,
         geneid2ix: &HashMap<String, usize>,
         tms: &[TranscriptModel],
     ) -> Option<i32> {
@@ -1211,7 +1211,7 @@ impl Logic for SmartSeq2 {
         &self,
         molitem: &Molitem,
         cell_bcidx: usize,
-        dict_layers_columns: &mut HashMap<String, Array2<u16>>,
+        dict_layers_columns: &mut HashMap<String, Array2<u32>>,
         geneid2ix: &HashMap<String, usize>,
         tms: &[TranscriptModel],
     ) -> Option<i32> {

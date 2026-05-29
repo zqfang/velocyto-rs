@@ -402,6 +402,10 @@ pub fn load_velocyto_hdf5(filename: &str) -> anyhow::Result<crate::analysis::Vel
                 let f64_arr = arr.mapv(|v| v as f64);
                 loom.layers.insert(key, f64_arr);
             }
+            HdfValue::Array2U32(arr) => {
+                let f64_arr = arr.mapv(|v| v as f64);
+                loom.layers.insert(key, f64_arr);
+            }
             _ => {
                 // Row/col attributes and other metadata are ignored in the stub
             }

@@ -16,7 +16,7 @@ pub const SPLIC_INACUR: i64 = 6;
 pub const MIN_POLYT: i64 = 8;
 pub const MAX_USHORT: u32 = (1 << 16) - 1;
 
-pub const LOOM_NUMERIC_DTYPE: &str = "uint16";
+pub const LOOM_NUMERIC_DTYPE: &str = "uint32";
 
 pub const EXTENSION5_LEN: i64 = 0;
 pub const EXTENSION3_LEN: i64 = 0;

@@ -31,7 +31,7 @@ pub struct RunSmartseq2Args {
     /// GTF file containing genomic intervals to mask (e.g. repeats)
     #[arg(short = 'm', long)]
     pub repmask: Option<String>,
-    /// dtype for loom layer arrays (default: uint32)
+    /// dtype for loom layer arrays: "uint32" (default, lossless) or "uint16" (smaller, saturates at 65535)
     #[arg(short = 't', long, default_value = "uint32")]
     pub dtype: String,
     /// Debug dump: save a molecular mapping report every N cells (0 = disabled)
@@ -68,5 +68,7 @@ pub fn run_smartseq2(args: RunSmartseq2Args) -> anyhow::Result<()> {
         &args.dump,
         &args.dtype,
         &[],
+        None,
+        None,
     )
 }

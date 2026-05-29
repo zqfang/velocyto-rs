@@ -39,12 +39,18 @@ pub struct Run10xArgs {
     /// MB of memory per thread for samtools sort
     #[arg(long, default_value_t = 2048)]
     pub samtools_memory: usize,
-    /// dtype for loom layer arrays; use uint32 if >6000 molecules/gene/cell expected
-    #[arg(short = 't', long, default_value = "uint16")]
+    /// dtype for loom layer arrays: "uint32" (default, lossless) or "uint16" (smaller, saturates at 65535)
+    #[arg(short = 't', long, default_value = "uint32")]
     pub dtype: String,
     /// Debug dump: save a molecular mapping report every N cells (0 = disabled)
     #[arg(short = 'd', long, default_value = "0")]
     pub dump: String,
+    /// BAM tag for cell barcode (overrides auto-detection; e.g. `CB` or `XC`)
+    #[arg(long)]
+    pub cb_tag: Option<String>,
+    /// BAM tag for UMI barcode (overrides auto-detection; e.g. `UB` or `XM`)
+    #[arg(long)]
+    pub ub_tag: Option<String>,
 }
 
 /// Runs the velocity analysis for a 10X Chromium sample.
@@ -116,6 +122,8 @@ pub fn run10x(args: Run10xArgs) -> anyhow::Result<()> {
         &args.dump,
         &args.dtype,
         &[],
+        args.cb_tag.as_deref(),
+        args.ub_tag.as_deref(),
     )
 }
 

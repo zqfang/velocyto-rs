@@ -15,6 +15,8 @@ pub enum HdfValue {
     Array2F64(ndarray::Array2<f64>),
     Array1U16(ndarray::Array1<u16>),
     Array2U16(ndarray::Array2<u16>),
+    Array1U32(ndarray::Array1<u32>),
+    Array2U32(ndarray::Array2<u32>),
     Bytes(Vec<u8>),
 }
 
@@ -97,6 +99,27 @@ pub fn dump_hdf5(
                     .write::<u16>(arr.as_slice().unwrap())
                     .map_err(|e| anyhow::anyhow!("HDF5 write Array2U16 '{key}': {e:?}"))?;
             }
+            HdfValue::Array1U32(arr) => {
+                let n = arr.len();
+                let chunk = (chunks.0.min(n)).max(1) as u64;
+                wf.new_dataset_builder(key)
+                    .shape(&[n as u64])
+                    .chunk(&[chunk])
+                    .deflate(data_compression)
+                    .write::<u32>(arr.as_slice().unwrap())
+                    .map_err(|e| anyhow::anyhow!("HDF5 write Array1U32 '{key}': {e:?}"))?;
+            }
+            HdfValue::Array2U32(arr) => {
+                let (r, c) = arr.dim();
+                let chunk0 = (chunks.0.min(r)).max(1) as u64;
+                let chunk1 = (chunks.1.min(c)).max(1) as u64;
+                wf.new_dataset_builder(key)
+                    .shape(&[r as u64, c as u64])
+                    .chunk(&[chunk0, chunk1])
+                    .deflate(data_compression)
+                    .write::<u32>(arr.as_slice().unwrap())
+                    .map_err(|e| anyhow::anyhow!("HDF5 write Array2U32 '{key}': {e:?}"))?;
+            }
             HdfValue::Bytes(bytes) => {
                 // Compress with zlib then store as u8 dataset under "&key"
                 let compressed = obj2uint(bytes, noarray_compression);
@@ -153,9 +176,11 @@ pub fn load_hdf5(filename: &str) -> anyhow::Result<HashMap<String, HdfValue>> {
                 .map_err(|e| anyhow::anyhow!("HDF5 shape '{name}': {e:?}"))?;
             match shape.len() {
                 1 => {
-                    // Try f64 first, fall back to u16
+                    // Try f64, then u32 (current layer dtype), then legacy u16
                     if let Ok(arr) = ds.read_1d::<f64>() {
                         result.insert(name, HdfValue::Array1F64(arr));
+                    } else if let Ok(arr) = ds.read_1d::<u32>() {
+                        result.insert(name, HdfValue::Array1U32(arr));
                     } else {
                         let arr = ds
                             .read_1d::<u16>()
@@ -166,6 +191,8 @@ pub fn load_hdf5(filename: &str) -> anyhow::Result<HashMap<String, HdfValue>> {
                 2 => {
                     if let Ok(arr) = ds.read_2d::<f64>() {
                         result.insert(name, HdfValue::Array2F64(arr));
+                    } else if let Ok(arr) = ds.read_2d::<u32>() {
+                        result.insert(name, HdfValue::Array2U32(arr));
                     } else {
                         let arr = ds
                             .read_2d::<u16>()
@@ -185,4 +212,54 @@ pub fn load_hdf5(filename: &str) -> anyhow::Result<HashMap<String, HdfValue>> {
     }
 
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Write a single dataset to a temp HDF5 file and read it back.
+    fn roundtrip(key: &str, value: HdfValue) -> HdfValue {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("roundtrip.h5");
+        let p = path.to_str().unwrap();
+        let mut attrs = HashMap::new();
+        attrs.insert(key.to_string(), value);
+        dump_hdf5(p, &attrs, 2, (64, 64), 6).unwrap();
+        load_hdf5(p).unwrap().remove(key).unwrap()
+    }
+
+    /// Recover a 2-D u32 layer regardless of whether it loads back as u32 or
+    /// (widened, still lossless) f64 — the invariant under test is value fidelity.
+    fn as_u32_2d(v: HdfValue) -> ndarray::Array2<u32> {
+        match v {
+            HdfValue::Array2U32(a) => a,
+            HdfValue::Array2F64(a) => a.mapv(|x| x as u32),
+            _ => panic!("unexpected variant for 2-D u32 dataset"),
+        }
+    }
+
+    fn as_u32_1d(v: HdfValue) -> ndarray::Array1<u32> {
+        match v {
+            HdfValue::Array1U32(a) => a,
+            HdfValue::Array1F64(a) => a.mapv(|x| x as u32),
+            _ => panic!("unexpected variant for 1-D u32 dataset"),
+        }
+    }
+
+    #[test]
+    fn u32_2d_layer_roundtrips_values_above_u16_max() {
+        // 70_000 > 65_535: this is exactly the count that overflowed the old
+        // u16-only layer path and motivated the uint32 default.
+        let arr = ndarray::array![[1u32, 70_000u32], [3u32, 4_000_000u32]];
+        let recovered = as_u32_2d(roundtrip("spliced", HdfValue::Array2U32(arr.clone())));
+        assert_eq!(recovered, arr);
+    }
+
+    #[test]
+    fn u32_1d_roundtrips() {
+        let arr = ndarray::array![0u32, 99_999u32, 4_294_967_295u32];
+        let recovered = as_u32_1d(roundtrip("tot", HdfValue::Array1U32(arr.clone())));
+        assert_eq!(recovered, arr);
+    }
 }

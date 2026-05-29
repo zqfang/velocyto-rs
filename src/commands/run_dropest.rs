@@ -43,7 +43,7 @@ pub struct RunDropestArgs {
     /// MB of memory per thread for samtools sort
     #[arg(long, default_value_t = 2048)]
     pub samtools_memory: usize,
-    /// dtype for loom layer arrays (default: uint32)
+    /// dtype for loom layer arrays: "uint32" (default, lossless) or "uint16" (smaller, saturates at 65535)
     #[arg(short = 't', long, default_value = "uint32")]
     pub dtype: String,
     /// Debug dump: save a molecular mapping report every N cells (0 = disabled)
@@ -113,5 +113,7 @@ pub fn run_dropest(args: RunDropestArgs) -> anyhow::Result<()> {
         &args.dump,
         &args.dtype,
         &[],
+        None,
+        None,
     )
 }

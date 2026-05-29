@@ -121,6 +121,8 @@ Key options:
 | `-t / --dtype` | `uint32` | Layer array dtype; use `uint16` for low-depth data |
 | `--samtools-threads` | 16 | Threads for `samtools sort` |
 | `--samtools-memory` | 2048 | MB per thread for `samtools sort` |
+| `--cb-tag` | auto | BAM tag for cell barcode (e.g. `CB`, `XC`); skips auto-detection when both tags are set |
+| `--ub-tag` | auto | BAM tag for UMI barcode (e.g. `UB`, `XM`); skips auto-detection when both tags are set |
 
 
 

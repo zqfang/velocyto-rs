@@ -67,12 +67,18 @@ pub struct RunArgs {
     /// MB of memory per thread for samtools sort
     #[arg(long, default_value_t = 2048)]
     pub samtools_memory: usize,
-    /// dtype for loom layer arrays; use uint32 if >6000 molecules/gene/cell expected
+    /// dtype for loom layer arrays: "uint32" (default, lossless) or "uint16" (smaller, saturates at 65535)
     #[arg(short = 't', long, default_value = "uint32")]
     pub dtype: String,
     /// Debug dump: save a molecular mapping report every N cells (0 = disabled)
     #[arg(short = 'd', long, default_value = "0")]
     pub dump: String,
+    /// BAM tag for cell barcode (overrides auto-detection; e.g. `CB` or `XC`)
+    #[arg(long)]
+    pub cb_tag: Option<String>,
+    /// BAM tag for UMI barcode (overrides auto-detection; e.g. `UB` or `XM`)
+    #[arg(long)]
+    pub ub_tag: Option<String>,
 }
 
 /// Runs the velocity analysis for generic BAM input.
@@ -96,6 +102,8 @@ pub fn run(args: RunArgs) -> anyhow::Result<()> {
         &args.dump,
         &args.dtype,
         &[],
+        args.cb_tag.as_deref(),
+        args.ub_tag.as_deref(),
     )
 }
 
@@ -173,8 +181,12 @@ pub fn run_inner(
     dump: &str,
     loom_numeric_dtype: &str,
     additional_ca: &[(&str, Vec<f32>)],
+    cb_tag: Option<&str>,
+    ub_tag: Option<&str>,
 ) -> anyhow::Result<()> {
     // ── Resolve inputs ────────────────────────────────────────────────────────
+    validate_loom_dtype(loom_numeric_dtype)?;
+
     let multi = bamfile.len() > 1;
 
     if onefilepercell && multi && bcfile.is_some() {
@@ -287,15 +299,28 @@ pub fn run_inner(
         as usize;
 
     // ── Peek BAM for tag names ────────────────────────────────────────────────
+    // When both tags are supplied explicitly, skip the 1000-read peek entirely.
+    // When only one (or neither) is supplied, peek auto-detects both, then the
+    // explicit values override whichever the caller specified.
     let tagname = if onefilepercell && without_umi {
         "NOTAG".to_string()
     } else if onefilepercell {
-        exincounter.peek_umi_only(&bamfile[0], 1000)?;
+        if ub_tag.is_none() {
+            exincounter.peek_umi_only(&bamfile[0], 1000)?;
+        }
         "NOTAG".to_string()
     } else {
-        exincounter.peek(&bamfile[0], 1000)?;
-        exincounter.cellbarcode_str.clone()
+        if cb_tag.is_none() || ub_tag.is_none() {
+            exincounter.peek(&bamfile[0], 1000)?;
+        }
+        cb_tag.unwrap_or(&exincounter.cellbarcode_str).to_string()
     };
+    if let Some(cb) = cb_tag {
+        exincounter.cellbarcode_str = cb.to_string();
+    }
+    if let Some(ub) = ub_tag {
+        exincounter.umibarcode_str = ub.to_string();
+    }
 
     // ── Cell-sorted BAM paths ─────────────────────────────────────────────────
     let bamfile_cellsorted: Vec<String> = if multi && onefilepercell {
@@ -385,7 +410,7 @@ pub fn run_inner(
 
     // ── Count ─────────────────────────────────────────────────────────────────
     log::info!("Starting molecule counting");
-    let mut all_layers: std::collections::HashMap<String, Vec<ndarray::Array2<u16>>> = layer_names
+    let mut all_layers: std::collections::HashMap<String, Vec<ndarray::Array2<u32>>> = layer_names
         .iter()
         .map(|n| (n.clone(), Vec::new()))
         .collect();
@@ -451,6 +476,8 @@ pub fn run_inner(
     _dump: &str,
     _loom_numeric_dtype: &str,
     _additional_ca: &[(&str, Vec<f32>)],
+    _cb_tag: Option<&str>,
+    _ub_tag: Option<&str>,
 ) -> anyhow::Result<()> {
     anyhow::bail!("BAM support required. Recompile with: cargo build --features bam")
 }
@@ -489,6 +516,19 @@ fn num_cpus() -> usize {
         .filter(|l| l.starts_with("processor"))
         .count()
         .max(1)
+}
+
+/// Validate the `--dtype` value for loom layer datasets.
+///
+/// Only `"uint32"` (default, lossless) and `"uint16"` (narrower, saturates at
+/// 65535) are supported. Any other value — including typos like `"unit32"` —
+/// is rejected rather than silently coerced.
+fn validate_loom_dtype(dtype: &str) -> anyhow::Result<()> {
+    if matches!(dtype, "uint16" | "uint32") {
+        Ok(())
+    } else {
+        bail!("Invalid --dtype '{dtype}'. Supported values: \"uint32\" (default) or \"uint16\".")
+    }
 }
 
 #[cfg(test)]
@@ -670,5 +710,92 @@ mod tests {
         let result =
             crate::commands::dropest_bc_correct::load_mapping_tsv_pub("/nonexistent/path.tsv");
         assert!(result.is_err());
+    }
+
+    // ── --cb-tag / --ub-tag CLI parsing ───────────────────────────────────────
+
+    /// Thin wrapper so RunArgs (which derives Args, not Parser) can be parsed
+    /// from a command-line slice in tests.
+    #[derive(clap::Parser)]
+    struct RunWrapper {
+        #[command(flatten)]
+        inner: RunArgs,
+    }
+
+    fn parse_run_args(argv: &[&str]) -> RunArgs {
+        use clap::Parser;
+        RunWrapper::try_parse_from(argv).unwrap().inner
+    }
+
+    #[test]
+    fn cb_ub_tag_flags_parse_explicit_values() {
+        let args = parse_run_args(&[
+            "cmd", "sample.bam", "ref.gtf", "--cb-tag", "CR", "--ub-tag", "UR",
+        ]);
+        assert_eq!(args.cb_tag.as_deref(), Some("CR"));
+        assert_eq!(args.ub_tag.as_deref(), Some("UR"));
+    }
+
+    #[test]
+    fn cb_ub_tag_flags_default_to_none() {
+        let args = parse_run_args(&["cmd", "sample.bam", "ref.gtf"]);
+        assert!(args.cb_tag.is_none());
+        assert!(args.ub_tag.is_none());
+    }
+
+    #[test]
+    fn cb_tag_only_leaves_ub_tag_none() {
+        let args = parse_run_args(&["cmd", "sample.bam", "ref.gtf", "--cb-tag", "GE"]);
+        assert_eq!(args.cb_tag.as_deref(), Some("GE"));
+        assert!(args.ub_tag.is_none());
+    }
+
+    // ── peek-skip condition ───────────────────────────────────────────────────
+
+    fn should_skip_peek(cb_tag: Option<&str>, ub_tag: Option<&str>) -> bool {
+        cb_tag.is_some() && ub_tag.is_some()
+    }
+
+    #[test]
+    fn peek_skipped_when_both_tags_provided() {
+        assert!(should_skip_peek(Some("CR"), Some("UR")));
+    }
+
+    #[test]
+    fn peek_runs_when_only_cb_tag_provided() {
+        assert!(!should_skip_peek(Some("CR"), None));
+    }
+
+    #[test]
+    fn peek_runs_when_only_ub_tag_provided() {
+        assert!(!should_skip_peek(None, Some("UR")));
+    }
+
+    #[test]
+    fn peek_runs_when_no_tags_provided() {
+        assert!(!should_skip_peek(None, None));
+    }
+
+    // ── loom dtype validation ─────────────────────────────────────────────────
+
+    #[test]
+    fn validate_loom_dtype_accepts_uint32() {
+        assert!(validate_loom_dtype("uint32").is_ok());
+    }
+
+    #[test]
+    fn validate_loom_dtype_accepts_uint16() {
+        assert!(validate_loom_dtype("uint16").is_ok());
+    }
+
+    #[test]
+    fn validate_loom_dtype_rejects_unknown() {
+        // Typos and unsupported widths must be rejected, not silently coerced.
+        for bad in ["uint8", "unit32", "float32", "u32", ""] {
+            assert!(
+                validate_loom_dtype(bad).is_err(),
+                "expected '{bad}' to be rejected"
+            );
+        }
     }
 }

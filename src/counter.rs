@@ -1016,7 +1016,7 @@ impl ExInCounter {
         bamfile: &str,
         multimap: bool,
         cell_batch_size: usize,
-    ) -> anyhow::Result<(HashMap<String, Vec<ndarray::Array2<u16>>>, Vec<String>)> {
+    ) -> anyhow::Result<(HashMap<String, Vec<ndarray::Array2<u32>>>, Vec<String>)> {
         // Reuse or build feature_indexes; reset scanning positions
         if self.feature_indexes.is_empty() {
             self.build_feature_indexes();
@@ -1052,7 +1052,7 @@ impl ExInCounter {
                unique_valid.len());
 
         let mut cell_bcs_order: Vec<String> = Vec::new();
-        let mut dict_list_arrays: HashMap<String, Vec<ndarray::Array2<u16>>> = HashMap::new();
+        let mut dict_list_arrays: HashMap<String, Vec<ndarray::Array2<u32>>> = HashMap::new();
         for layer_name in self.logic.layers() {
             dict_list_arrays.insert(layer_name.to_string(), Vec::new());
         }
@@ -1186,7 +1186,7 @@ impl ExInCounter {
                     let unspliced = dict_layer_columns
                         .get("unspliced")
                         .map(|a| a.sum_axis(ndarray::Axis(0)));
-                    let tot_mol: ndarray::Array1<u16> = match (spliced, unspliced) {
+                    let tot_mol: ndarray::Array1<u32> = match (spliced, unspliced) {
                         (Some(s), Some(u)) => s + u,
                         (Some(s), None) => s,
                         (None, Some(u)) => u,
@@ -1207,7 +1207,7 @@ impl ExInCounter {
                             .map(|(_, bc)| bc.clone()),
                     );
                     for (layer_name, arr) in &dict_layer_columns {
-                        let cols: Vec<ndarray::ArrayView1<u16>> = (0..arr.ncols())
+                        let cols: Vec<ndarray::ArrayView1<u32>> = (0..arr.ncols())
                             .filter(|&j| keep[j])
                             .map(|j| arr.column(j))
                             .collect();
@@ -1257,7 +1257,7 @@ impl ExInCounter {
         &mut self,
         cell_batch: &HashSet<String>,
         reads_to_count: &mut Vec<Read>,
-    ) -> (HashMap<String, ndarray::Array2<u16>>, Vec<String>) {
+    ) -> (HashMap<String, ndarray::Array2<u32>>, Vec<String>) {
         if self.logic.stranded() {
             if self.logic.accept_discordant() {
                 self.count_cell_batch_stranded_discordant_inner(cell_batch, reads_to_count)
@@ -1274,7 +1274,7 @@ impl ExInCounter {
         &mut self,
         cell_batch: &HashSet<String>,
         reads_to_count: &mut Vec<Read>,
-    ) -> (HashMap<String, ndarray::Array2<u16>>, Vec<String>) {
+    ) -> (HashMap<String, ndarray::Array2<u32>>, Vec<String>) {
         let mut molitems: HashMap<String, Molitem> = HashMap::new();
         reads_to_count.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let mut repeats_reads_count = 0usize;
@@ -1335,7 +1335,7 @@ impl ExInCounter {
         &mut self,
         cell_batch: &HashSet<String>,
         reads_to_count: &mut Vec<Read>,
-    ) -> (HashMap<String, ndarray::Array2<u16>>, Vec<String>) {
+    ) -> (HashMap<String, ndarray::Array2<u32>>, Vec<String>) {
         let mut molitems: HashMap<String, Molitem> = HashMap::new();
         reads_to_count.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let mut repeats_reads_count = 0usize;
@@ -1384,7 +1384,7 @@ impl ExInCounter {
         &mut self,
         cell_batch: &HashSet<String>,
         reads_to_count: &mut Vec<Read>,
-    ) -> (HashMap<String, ndarray::Array2<u16>>, Vec<String>) {
+    ) -> (HashMap<String, ndarray::Array2<u32>>, Vec<String>) {
         let mut molitems: HashMap<String, Molitem> = HashMap::new();
         reads_to_count.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let mut repeats_reads_count = 0usize;
@@ -1439,10 +1439,10 @@ impl ExInCounter {
         &self,
         cell_batch: &HashSet<String>,
         molitems: &HashMap<String, Molitem>,
-    ) -> (HashMap<String, ndarray::Array2<u16>>, Vec<String>) {
+    ) -> (HashMap<String, ndarray::Array2<u32>>, Vec<String>) {
         let n_genes = self.geneid2ix.len();
         let n_cells = cell_batch.len();
-        let mut dict_layers_columns: HashMap<String, ndarray::Array2<u16>> = HashMap::new();
+        let mut dict_layers_columns: HashMap<String, ndarray::Array2<u32>> = HashMap::new();
         for layer_name in self.logic.layers() {
             dict_layers_columns.insert(
                 layer_name.to_string(),
@@ -1496,20 +1496,20 @@ impl ExInCounter {
     pub fn dump_loom(
         &self,
         outfile: &str,
-        dict_list_arrays: &HashMap<String, Vec<ndarray::Array2<u16>>>,
+        dict_list_arrays: &HashMap<String, Vec<ndarray::Array2<u32>>>,
         cell_bcs_order: &[String],
     ) -> anyhow::Result<()> {
         use hdf5_pure_rust::WritableFile;
         use ndarray::Array2;
 
         // Concatenate batches horizontally per layer
-        let mut layers: HashMap<String, Array2<u16>> = HashMap::new();
+        let mut layers: HashMap<String, Array2<u32>> = HashMap::new();
         for (layer_name, arrays) in dict_list_arrays {
             if arrays.is_empty() {
                 layers.insert(layer_name.clone(), Array2::zeros((self.geneid2ix.len(), 0)));
                 continue;
             }
-            let views: Vec<ndarray::ArrayView2<u16>> = arrays.iter().map(|a| a.view()).collect();
+            let views: Vec<ndarray::ArrayView2<u32>> = arrays.iter().map(|a| a.view()).collect();
             let concatenated = ndarray::concatenate(ndarray::Axis(1), &views)
                 .map_err(|e| anyhow::anyhow!("Concatenation error: {e}"))?;
             layers.insert(layer_name.clone(), concatenated);
@@ -1567,19 +1567,43 @@ impl ExInCounter {
                 .map_err(|e| anyhow::anyhow!("HDF5 create layers group: {e:?}"))?;
             let mut sorted_layer_names: Vec<&String> = layers.keys().collect();
             sorted_layer_names.sort();
+            // Output element width is controlled by `loom_numeric_dtype`.
+            // Counts always accumulate as u32 (matching Python's unbounded ints);
+            // "uint32" (default) writes them losslessly, "uint16" saturates to
+            // u16::MAX to mirror legacy narrow output (with a warning if clamped).
+            let narrow = self.loom_numeric_dtype == "uint16";
             for layer_name in sorted_layer_names {
                 let arr = &layers[layer_name];
                 let (nr, nc) = arr.dim();
                 let chunk0 = (64usize.min(nr)).max(1) as u64;
                 let chunk1 = (64usize.min(nc)).max(1) as u64;
-                let flat: Vec<u16> = arr.iter().cloned().collect();
-                layers_group
-                    .new_dataset_builder(layer_name)
-                    .shape(&[nr as u64, nc as u64])
-                    .chunk(&[chunk0, chunk1])
-                    .deflate(2)
-                    .write::<u16>(&flat)
-                    .map_err(|e| anyhow::anyhow!("HDF5 write layer '{layer_name}': {e:?}"))?;
+                if narrow {
+                    let overflow = arr.iter().filter(|&&v| v > u16::MAX as u32).count();
+                    if overflow > 0 {
+                        warn!(
+                            "Layer '{layer_name}': {overflow} value(s) exceed 65535 and were \
+                             saturated by --dtype uint16; use --dtype uint32 to avoid loss"
+                        );
+                    }
+                    let flat: Vec<u16> =
+                        arr.iter().map(|&v| v.min(u16::MAX as u32) as u16).collect();
+                    layers_group
+                        .new_dataset_builder(layer_name)
+                        .shape(&[nr as u64, nc as u64])
+                        .chunk(&[chunk0, chunk1])
+                        .deflate(2)
+                        .write::<u16>(&flat)
+                        .map_err(|e| anyhow::anyhow!("HDF5 write layer '{layer_name}': {e:?}"))?;
+                } else {
+                    let flat: Vec<u32> = arr.iter().cloned().collect();
+                    layers_group
+                        .new_dataset_builder(layer_name)
+                        .shape(&[nr as u64, nc as u64])
+                        .chunk(&[chunk0, chunk1])
+                        .deflate(2)
+                        .write::<u32>(&flat)
+                        .map_err(|e| anyhow::anyhow!("HDF5 write layer '{layer_name}': {e:?}"))?;
+                }
             }
         }
 
@@ -1730,5 +1754,62 @@ fn aux_to_string(aux: rust_htslib::bam::record::Aux) -> String {
         Aux::String(s) => s.to_string(),
         Aux::Char(c) => (c as char).to_string(),
         other => format!("{other:?}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::logic::logic_from_name;
+
+    fn make_counter() -> ExInCounter {
+        ExInCounter::new(
+            "test".to_string(),
+            logic_from_name("Default"),
+            None,
+            "no",
+            false,
+            "0",
+            "/tmp".to_string(),
+            "uint16".to_string(),
+        )
+        .unwrap()
+    }
+
+    // ── default tag names ─────────────────────────────────────────────────────
+
+    #[test]
+    fn exincounter_default_cb_tag_is_cb() {
+        assert_eq!(make_counter().cellbarcode_str, "CB");
+    }
+
+    #[test]
+    fn exincounter_default_ub_tag_is_ub() {
+        assert_eq!(make_counter().umibarcode_str, "UB");
+    }
+
+    // ── explicit tag override ─────────────────────────────────────────────────
+
+    #[test]
+    fn cb_tag_override_is_reflected() {
+        let mut counter = make_counter();
+        counter.cellbarcode_str = "CR".to_string();
+        assert_eq!(counter.cellbarcode_str, "CR");
+    }
+
+    #[test]
+    fn ub_tag_override_is_reflected() {
+        let mut counter = make_counter();
+        counter.umibarcode_str = "UR".to_string();
+        assert_eq!(counter.umibarcode_str, "UR");
+    }
+
+    #[test]
+    fn both_tag_overrides_are_independent() {
+        let mut counter = make_counter();
+        counter.cellbarcode_str = "GE".to_string();
+        counter.umibarcode_str = "GM".to_string();
+        assert_eq!(counter.cellbarcode_str, "GE");
+        assert_eq!(counter.umibarcode_str, "GM");
     }
 }

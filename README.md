@@ -28,7 +28,7 @@ Measured with `/usr/bin/time -v` on the same machine, same input files, same bar
 |---|---|---|---|---|---|
 | `mini_chr21.bam`<br>(39 MB BAM, 16 MB GTF) | Python | 22.1 s | 390 MB | — | — |
 | | Rust | **2.2 s** | **36 MB** | **10× faster** | **11× less** |
-| `p395aWT1_s04.bam`<br>(1.7 GB BAM, 1.5 GB GTF) | Python | 14 min 47 s | 3.80 GB | — | — |
+| `s04.bam`<br>(1.7 GB BAM, 1.5 GB GTF) | Python | 14 min 47 s | 3.80 GB | — | — |
 | | Rust | **2 min 17 s** | **3.26 GB** | **6.5× faster** | **1.2× less** |
 
 Hardware: Linux x86-64, single machine.
@@ -45,7 +45,7 @@ Comparing Rust vs Python output on the same input (S08, 1974 cells × 39579 gene
 | Cell barcode set | Identical |
 | Gene row order | Identical (after fix to `assign_indexes_to_genes`) |
 | Layer counts (spliced/unspliced/ambiguous) | **100% identical** — 0 of 78 M (gene, cell) pairs differ |
-| Layer dtype | Rust uses `uint16`; Python uses `uint32` (intentional — see CLAUDE.md) |
+| Layer dtype | Rust uses `uint32` same as Python |
 
 **Comparison note:** 69 gene names appear twice in the dataset (same name, different accession/gene ID). A naive gene-name-keyed comparison will silently cross-map these and produce false diffs. Always align by `row_attrs/Accession` (unique gene ID), not by `row_attrs/Gene` (gene name).
 

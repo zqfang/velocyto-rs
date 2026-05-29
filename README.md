@@ -1,5 +1,8 @@
 # velocyto-rs
 
+> 🙏 **Heartfelt thanks to Prof. Johan Henriksson ([@mahogny](https://github.com/mahogny))** for the original software translation work that made this project possible. Your contribution and inspiration are deeply appreciated!
+
+
 Faithful Rust translation of [velocyto.py](https://github.com/velocyto-team/velocyto.py) v0.17.16 — RNA velocity analysis for single-cell RNA-seq data.
 
 **Reference snapshot**: velocyto.py v0.17.16 (no git hash available — copied source snapshot).  

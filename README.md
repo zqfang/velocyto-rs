@@ -62,9 +62,71 @@ The dominant cost for large reference genomes is loading the GTF annotation. Thr
 ## Build
 
 ```bash
-cargo build
-cargo build --release
+cargo build --release --features bam
 ```
+
+## Usage
+
+All subcommands require the `bam` feature (built in by default via `--features bam`). Run with `--help` for the full option list.
+
+### `run10x` — 10X Chromium (CellRanger output)
+
+The most common entry point. Pass the CellRanger sample folder and a GTF file; the BAM and barcodes list are found automatically.
+
+```bash
+velocyto-rs run10x /data/cellranger/sample1 /ref/gencode.v42.gtf
+```
+
+With a repeat-mask GTF and verbose logging:
+
+```bash
+velocyto-rs run10x /data/cellranger/sample1 /ref/gencode.v42.gtf \
+    --mask /ref/repeats.gtf \
+    --verbose
+```
+
+Output is written to `<samplefolder>/velocyto/<samplename>.loom`.
+
+### `run` — generic BAM
+
+Use this for any platform not covered by a dedicated subcommand (BD Rhapsody, Parse Biosciences, etc.).
+
+```bash
+velocyto-rs run sample.bam /ref/gencode.v42.gtf \
+    --bcfile barcodes.txt \
+    --outputfolder ./results \
+    --sampleid my_sample
+```
+
+Multiple BAMs merged into one loom:
+
+```bash
+velocyto-rs run lane1.bam lane2.bam lane3.bam /ref/gencode.v42.gtf \
+    --bcfile barcodes.txt \
+    --sampleid pooled_run
+```
+
+Key options:
+
+| Flag | Default | Description |
+|---|---|---|
+| `-b / --bcfile` | — | Barcode whitelist (plain text or `.gz`, one per line) |
+| `-o / --outputfolder` | `<bam-dir>/velocyto` | Output directory |
+| `-e / --sampleid` | derived from BAM name | Loom filename stem |
+| `-m / --mask` | — | GTF of genomic intervals to mask (e.g. repeats) |
+| `-l / --logic` | `Default` | Molecule-filtering logic class |
+| `-U / --without-umi` | false | Read-count mode (no UMI deduplication) |
+| `-u / --umi-extension` | `no` | Extend UMI identity: `no`, `chr`, `Gene`, `Cluster`, `all` |
+| `-M / --multimap` | false | Count non-uniquely mapped reads (not recommended) |
+| `-t / --dtype` | `uint32` | Layer array dtype; use `uint16` for low-depth data |
+| `--samtools-threads` | 16 | Threads for `samtools sort` |
+| `--samtools-memory` | 2048 | MB per thread for `samtools sort` |
+
+
+
+
+
+
 
 ## License
 

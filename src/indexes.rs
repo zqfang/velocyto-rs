@@ -61,10 +61,9 @@ impl TranscriptsIndex {
         let mut tmodel_i = self.tidx; // Python: tmodel = self.transcipt_models[self.tidx]
         for segment in &read.segments {
             let mut i = self.tidx; // Python: i = self.tidx (reset per segment)
-            // while condition uses tmodel (at tmodel_i), body checks tmodel then advances i
-            // and reassigns tmodel = self.transcipt_models[i]
-            while i < self.maxtidx
-                && self.transcript_models[tmodel_i].starts_upstream_of(*segment)
+                                   // while condition uses tmodel (at tmodel_i), body checks tmodel then advances i
+                                   // and reassigns tmodel = self.transcipt_models[i]
+            while i < self.maxtidx && self.transcript_models[tmodel_i].starts_upstream_of(*segment)
             {
                 if self.transcript_models[tmodel_i].intersects(*segment, MIN_FLANK) {
                     matched.insert(tmodel_i);
@@ -266,6 +265,7 @@ mod tests {
         Read::new(
             "bc1".to_string(),
             "umi1".to_string(),
+            String::new(),
             "chr1".to_string(),
             '+',
             pos,

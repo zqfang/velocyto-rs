@@ -39,6 +39,10 @@ pub struct ExInCounter {
     pub logic: Box<dyn Logic>,
     pub cellbarcode_str: String,
     pub umibarcode_str: String,
+    /// BAM tag carrying the sample identity (e.g. BD Rhapsody `ST`). When
+    /// `Some`, reads are demultiplexed so the cell identity becomes
+    /// `(sample, barcode)`; when `None`, behaviour is single-sample (unchanged).
+    pub sample_tag: Option<String>,
     /// Flat global TranscriptModel list, built by build_feature_indexes
     pub tms_flat: Vec<TranscriptModel>,
     /// chromstrand → FeatureIndex, built once by build_feature_indexes / mark_up_introns
@@ -115,6 +119,7 @@ impl ExInCounter {
             logic,
             cellbarcode_str: "CB".to_string(),
             umibarcode_str: "UB".to_string(),
+            sample_tag: None,
             tms_flat: Vec::new(),
             feature_indexes: HashMap::new(),
             mask_indexes: HashMap::new(),
@@ -391,21 +396,29 @@ impl ExInCounter {
             .collect();
 
         // Schwartzian transform — same rationale as in read_transcriptmodels.
-        let sort_keys: Vec<(String, bool, i64)> = gtf_lines.iter().map(|line| {
-            let mut it = line.splitn(8, '\t');
-            let chrom = it.next().unwrap_or("").to_string();
-            let _ = it.next();
-            let _ = it.next();
-            let pos: i64 = it.next().unwrap_or("0").parse().unwrap_or(0);
-            let _ = it.next();
-            let _ = it.next();
-            let strand_plus = it.next().map_or(false, |s| s == "+");
-            (chrom, strand_plus, pos)
-        }).collect();
+        let sort_keys: Vec<(String, bool, i64)> = gtf_lines
+            .iter()
+            .map(|line| {
+                let mut it = line.splitn(8, '\t');
+                let chrom = it.next().unwrap_or("").to_string();
+                let _ = it.next();
+                let _ = it.next();
+                let pos: i64 = it.next().unwrap_or("0").parse().unwrap_or(0);
+                let _ = it.next();
+                let _ = it.next();
+                let strand_plus = it.next().map_or(false, |s| s == "+");
+                (chrom, strand_plus, pos)
+            })
+            .collect();
         let mut order: Vec<usize> = (0..gtf_lines.len()).collect();
-        order.sort_by(|&a, &b| sort_keys[a].cmp(&sort_keys[b]).then(gtf_lines[a].cmp(&gtf_lines[b])));
+        order.sort_by(|&a, &b| {
+            sort_keys[a]
+                .cmp(&sort_keys[b])
+                .then(gtf_lines[a].cmp(&gtf_lines[b]))
+        });
         drop(sort_keys);
-        let gtf_lines: Vec<String> = order.into_iter()
+        let gtf_lines: Vec<String> = order
+            .into_iter()
             .map(|i| std::mem::take(&mut gtf_lines[i]))
             .collect();
 
@@ -504,9 +517,10 @@ impl ExInCounter {
         debug!("Assigning indexes to genes");
         // Iterate in GTF-encounter order so gene indices match Python exactly.
         // gene_order[i] is the gene ID whose first transcript appeared i-th in the sorted GTF.
-        for trmodel in gene_order.iter().flat_map(|gid| {
-            features.values().filter(move |tm| &tm.geneid == gid)
-        }) {
+        for trmodel in gene_order
+            .iter()
+            .flat_map(|gid| features.values().filter(move |tm| &tm.geneid == gid))
+        {
             if let Some(gi) = self.genes.get_mut(&trmodel.geneid) {
                 if gi.start > trmodel.start() {
                     gi.start = trmodel.start();
@@ -625,7 +639,9 @@ impl ExInCounter {
             .lines()
             .filter_map(|l| l.ok())
             .filter(|l| {
-                if l.starts_with('#') { return false; }
+                if l.starts_with('#') {
+                    return false;
+                }
                 l.splitn(4, '\t').nth(2).map_or(false, |f| f == "exon")
             })
             .collect();
@@ -636,26 +652,34 @@ impl ExInCounter {
         // then sort indices O(n log n) comparing only those small keys.
         // The old sort_by(sorting_key) re-parsed and cloned each line on every comparison
         // call — O(n log n) full-line clones — which dominated runtime for large GTFs.
-        let sort_keys: Vec<(String, bool, i64)> = raw_lines.iter().map(|line| {
-            let mut it = line.splitn(8, '\t');
-            let chrom = it.next().unwrap_or("").to_string();
-            let _ = it.next(); // source
-            let _ = it.next(); // feature
-            let pos: i64 = it.next().unwrap_or("0").parse().unwrap_or(0);
-            let _ = it.next(); // end
-            let _ = it.next(); // score
-            let strand_plus = it.next().map_or(false, |s| s == "+");
-            (chrom, strand_plus, pos)
-        }).collect();
+        let sort_keys: Vec<(String, bool, i64)> = raw_lines
+            .iter()
+            .map(|line| {
+                let mut it = line.splitn(8, '\t');
+                let chrom = it.next().unwrap_or("").to_string();
+                let _ = it.next(); // source
+                let _ = it.next(); // feature
+                let pos: i64 = it.next().unwrap_or("0").parse().unwrap_or(0);
+                let _ = it.next(); // end
+                let _ = it.next(); // score
+                let strand_plus = it.next().map_or(false, |s| s == "+");
+                (chrom, strand_plus, pos)
+            })
+            .collect();
         let mut order: Vec<usize> = (0..raw_lines.len()).collect();
         // Stable sort with full-line tiebreaker matches Python's sorted(..., key=sorting_key).
         // Python's key is (chrom, strand_plus, start, full_line); for ties on the first three
         // fields the full line is compared lexicographically.  sort_unstable_by ignores ties,
         // which produces a different gene-encounter order for same-start exons.
-        order.sort_by(|&a, &b| sort_keys[a].cmp(&sort_keys[b]).then(raw_lines[a].cmp(&raw_lines[b])));
+        order.sort_by(|&a, &b| {
+            sort_keys[a]
+                .cmp(&sort_keys[b])
+                .then(raw_lines[a].cmp(&raw_lines[b]))
+        });
         drop(sort_keys);
         let mut raw_lines = raw_lines;
-        let gtf_lines: Vec<String> = order.into_iter()
+        let gtf_lines: Vec<String> = order
+            .into_iter()
             .map(|i| std::mem::take(&mut raw_lines[i]))
             .collect();
 
@@ -918,6 +942,7 @@ impl ExInCounter {
             let read_obj = Read::new(
                 String::new(),
                 String::new(),
+                String::new(),
                 chrom.clone(),
                 strand,
                 pos,
@@ -1057,9 +1082,19 @@ impl ExInCounter {
             dict_list_arrays.insert(layer_name.to_string(), Vec::new());
         }
 
+        // `cell_batch` holds composite "{sample}|{bc}" cell identities and drives
+        // column allocation; `cell_batch_bcs` holds the raw cell barcodes and
+        // drives the flush boundary. They are decoupled because the BAM is sorted
+        // by cell barcode only: all reads of one barcode are contiguous, but their
+        // sample tags are interleaved. Flushing on the raw barcode guarantees every
+        // read of a barcode (across all samples) lands in one batch, so a single
+        // (sample, barcode) cell is never split across batches — which would
+        // corrupt UMI deduplication.
         let mut cell_batch: HashSet<String> = HashSet::new();
+        let mut cell_batch_bcs: HashSet<String> = HashSet::new();
         let mut reads_to_count: Vec<Read> = Vec::new();
         let mut nth = 0usize;
+        let mut no_sample_tag_count = 0usize;
 
         let mut reader = bam::Reader::from_path(bamfile)
             .map_err(|e| anyhow::anyhow!("Cannot open BAM {bamfile}: {e}"))?;
@@ -1111,6 +1146,24 @@ impl ExInCounter {
                             continue;
                         }
                     };
+                    // Sample demultiplexing (e.g. BD Rhapsody `ST`). When no
+                    // sample tag is configured, or the read lacks it, `sample`
+                    // is the empty string and the cell identity collapses to the
+                    // barcode alone (single-sample behaviour, unchanged).
+                    // When demultiplexing is active, a read with no sample tag has
+                    // no defined sample of origin (typically undetermined/multiplet
+                    // noise), so it is dropped rather than pooled into a phantom
+                    // sample-less cell. With demultiplexing off, `sample` is "".
+                    let sample = match &self.sample_tag {
+                        Some(tag) => match rec.aux(tag.as_bytes()) {
+                            Ok(aux) => aux_to_string(aux),
+                            Err(_) => {
+                                no_sample_tag_count += 1;
+                                continue;
+                            }
+                        },
+                        None => String::new(),
+                    };
                     if !self.valid_bcset.contains(&bc) {
                         if self.filter_mode {
                             continue;
@@ -1143,6 +1196,7 @@ impl ExInCounter {
                     let read_obj = Read::new(
                         bc,
                         umi,
+                        sample,
                         chrom,
                         strand,
                         pos,
@@ -1163,8 +1217,10 @@ impl ExInCounter {
 
             // Determine if we should flush
             let flush = match &r_opt {
-                None => !cell_batch.is_empty(),
-                Some(r) => cell_batch.len() == cell_batch_size && !cell_batch.contains(&r.bc),
+                None => !cell_batch_bcs.is_empty(),
+                Some(r) => {
+                    cell_batch_bcs.len() == cell_batch_size && !cell_batch_bcs.contains(&r.bc)
+                }
             };
 
             if flush {
@@ -1229,6 +1285,7 @@ impl ExInCounter {
                 }
 
                 cell_batch.clear();
+                cell_batch_bcs.clear();
                 reads_to_count.clear();
                 for fi in self.feature_indexes.values_mut() {
                     fi.reset();
@@ -1240,7 +1297,8 @@ impl ExInCounter {
 
             match r_opt {
                 Some(r) => {
-                    cell_batch.insert(r.bc.clone());
+                    cell_batch_bcs.insert(r.bc.clone());
+                    cell_batch.insert(format!("{}|{}", r.sample, r.bc));
                     reads_to_count.push(r);
                 }
                 None => break,
@@ -1248,6 +1306,9 @@ impl ExInCounter {
         }
         let _ = pending_read;
 
+        if self.sample_tag.is_some() {
+            debug!("{no_sample_tag_count} reads dropped: missing sample tag");
+        }
         debug!("Counting done!");
         Ok((dict_list_arrays, cell_bcs_order))
     }
@@ -1302,7 +1363,7 @@ impl ExInCounter {
                 .map(|ii| ii.find_overlapping_ivls(r))
                 .unwrap_or_default();
             if !mappings_record.is_empty() {
-                let bcumi = format!("{}${}", r.bc, r.umi);
+                let bcumi = format!("{}|{}${}", r.sample, r.bc, r.umi);
                 molitems
                     .entry(bcumi)
                     .or_default()
@@ -1368,7 +1429,7 @@ impl ExInCounter {
                     .unwrap_or_default()
             };
             if !mappings_record.is_empty() {
-                let bcumi = format!("{}${}", r.bc, r.umi);
+                let bcumi = format!("{}|{}${}", r.sample, r.bc, r.umi);
                 molitems
                     .entry(bcumi)
                     .or_default()
@@ -1411,7 +1472,7 @@ impl ExInCounter {
                 .map(|ii| ii.find_overlapping_ivls(r))
                 .unwrap_or_default();
             if !mappings_record.is_empty() {
-                let bcumi = format!("{}${}", r.bc, r.umi);
+                let bcumi = format!("{}|{}${}", r.sample, r.bc, r.umi);
                 molitems
                     .entry(bcumi)
                     .or_default()
@@ -1423,7 +1484,7 @@ impl ExInCounter {
                 .map(|iir| iir.find_overlapping_ivls(r))
                 .unwrap_or_default();
             if !mappings_record_r.is_empty() {
-                let bcumi = format!("{}${}", r.bc, r.umi);
+                let bcumi = format!("{}|{}${}", r.sample, r.bc, r.umi);
                 molitems
                     .entry(bcumi)
                     .or_default()
@@ -1498,6 +1559,7 @@ impl ExInCounter {
         outfile: &str,
         dict_list_arrays: &HashMap<String, Vec<ndarray::Array2<u32>>>,
         cell_bcs_order: &[String],
+        sample_ids: Option<&[String]>,
     ) -> anyhow::Result<()> {
         use hdf5_pure_rust::WritableFile;
         use ndarray::Array2;
@@ -1653,6 +1715,14 @@ impl ExInCounter {
             cg.new_dataset_builder("CellID")
                 .write_vlen_utf8_strings(&cell_slices)
                 .map_err(|e| anyhow::anyhow!("HDF5 col_attrs/CellID: {e:?}"))?;
+            // SampleID is written only when sample demultiplexing is active, so a
+            // single-sample loom stays byte-for-byte identical to the prior output.
+            if let Some(samples) = sample_ids {
+                let sample_slices: Vec<&str> = samples.iter().map(|s| s.as_str()).collect();
+                cg.new_dataset_builder("SampleID")
+                    .write_vlen_utf8_strings(&sample_slices)
+                    .map_err(|e| anyhow::anyhow!("HDF5 col_attrs/SampleID: {e:?}"))?;
+            }
         }
 
         wf.flush()
@@ -1703,7 +1773,6 @@ pub fn reverse_strand(s: char) -> char {
         '+'
     }
 }
-
 
 fn parse_gtf_fields(
     line: &str,

@@ -417,12 +417,22 @@ pub fn fit_slope_weighted_r2(
     let mut slopes = Array1::<f64>::zeros(ngenes);
     let mut r2 = Array1::<f64>::zeros(ngenes);
     for i in 0..ngenes {
-        let m = fit1_slope_weighted(y_mat.row(i), x_mat.row(i), w_mat.row(i), limit_gamma, bounds);
+        let m = fit1_slope_weighted(
+            y_mat.row(i),
+            x_mat.row(i),
+            w_mat.row(i),
+            limit_gamma,
+            bounds,
+        );
         slopes[i] = m;
         let y = y_mat.row(i);
         let x = x_mat.row(i);
         let y_mean = y.mean().unwrap_or(0.0);
-        let ssres: f64 = x.iter().zip(y.iter()).map(|(&xi, &yi)| (m * xi - yi).powi(2)).sum();
+        let ssres: f64 = x
+            .iter()
+            .zip(y.iter())
+            .map(|(&xi, &yi)| (m * xi - yi).powi(2))
+            .sum();
         let sstot: f64 = y.iter().map(|&yi| (y_mean - yi).powi(2)).sum();
         let v = 1.0 - ssres / sstot;
         r2[i] = if v.is_finite() { v } else { -1e16 };
@@ -471,13 +481,23 @@ pub fn fit_slope_weighted_offset_r2(
     let mut offsets = Array1::<f64>::zeros(ngenes);
     let mut r2 = Array1::<f64>::zeros(ngenes);
     for i in 0..ngenes {
-        let (m, q) = fit1_slope_weighted_offset(y_mat.row(i), x_mat.row(i), w_mat.row(i), fixperc_q, limit_gamma);
+        let (m, q) = fit1_slope_weighted_offset(
+            y_mat.row(i),
+            x_mat.row(i),
+            w_mat.row(i),
+            fixperc_q,
+            limit_gamma,
+        );
         slopes[i] = m;
         offsets[i] = q;
         let y = y_mat.row(i);
         let x = x_mat.row(i);
         let y_mean = y.mean().unwrap_or(0.0);
-        let ssres: f64 = x.iter().zip(y.iter()).map(|(&xi, &yi)| (m * xi + q - yi).powi(2)).sum();
+        let ssres: f64 = x
+            .iter()
+            .zip(y.iter())
+            .map(|(&xi, &yi)| (m * xi + q - yi).powi(2))
+            .sum();
         let sstot: f64 = y.iter().map(|&yi| (y_mean - yi).powi(2)).sum();
         let v = 1.0 - ssres / sstot;
         r2[i] = if v.is_finite() { v } else { -1e16 };

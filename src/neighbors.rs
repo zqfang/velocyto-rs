@@ -398,7 +398,11 @@ pub fn make_mutual(knn: &CsMat<f64>) -> CsMat<f64> {
 pub fn min_n(row_data: &[f64], row_indices: &[usize], n: usize) -> (Vec<f64>, Vec<usize>) {
     let n = n.min(row_data.len());
     let mut order: Vec<usize> = (0..row_data.len()).collect();
-    order.sort_by(|&a, &b| row_data[a].partial_cmp(&row_data[b]).unwrap_or(std::cmp::Ordering::Equal));
+    order.sort_by(|&a, &b| {
+        row_data[a]
+            .partial_cmp(&row_data[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     order.truncate(n);
     let top_values: Vec<f64> = order.iter().map(|&i| row_data[i]).collect();
     let top_indices: Vec<usize> = order.iter().map(|&i| row_indices[i]).collect();
@@ -451,7 +455,10 @@ pub fn knn_smooth_weights(
     k_mutual: usize,
     n_jobs: i32,
 ) -> (CsMat<f64>, CsMat<f64>) {
-    assert!(k_search >= k_mutual, "k_search needs to be bigger than k_mutual");
+    assert!(
+        k_search >= k_mutual,
+        "k_search needs to be bigger than k_mutual"
+    );
     // Python: matrix.T is (cells, genes)
     let matrix_t = matrix.t().to_owned();
     let knn = knn_distance_matrix(matrix_t.view(), Some(metric), k_search, "distance", n_jobs);
@@ -693,7 +700,10 @@ impl BalancedKNN {
         if self.bknn.is_none() {
             self.kneighbors_graph(None);
         }
-        let bknn = self.bknn.as_ref().expect("bknn must be set after kneighbors_graph");
+        let bknn = self
+            .bknn
+            .as_ref()
+            .expect("bknn must be set after kneighbors_graph");
 
         // connectivity = (bknn.T > 0) or make_mutual(bknn > 0)
         // binarise bknn first

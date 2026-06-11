@@ -70,5 +70,6 @@ pub fn run_smartseq2(args: RunSmartseq2Args) -> anyhow::Result<()> {
         &[],
         None,
         None,
+        None,
     )
 }

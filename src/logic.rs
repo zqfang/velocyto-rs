@@ -115,7 +115,9 @@ impl Logic for Permissive10X {
                             let ds_idx = feat.get_downstream_exon_idx(tm);
                             if ds_idx < tm.list_features.len() {
                                 let downstream_exon = &tm.list_features[ds_idx];
-                                if downstream_exon.start_overlaps_with_part_of(sm.segment, MIN_FLANK) {
+                                if downstream_exon
+                                    .start_overlaps_with_part_of(sm.segment, MIN_FLANK)
+                                {
                                     has_exin_intron_span = true;
                                 }
                             }
@@ -308,7 +310,9 @@ impl Logic for Intermediate10X {
                             let ds_idx = feat.get_downstream_exon_idx(tm);
                             if ds_idx < tm.list_features.len() {
                                 let downstream_exon = &tm.list_features[ds_idx];
-                                if downstream_exon.start_overlaps_with_part_of(sm.segment, MIN_FLANK) {
+                                if downstream_exon
+                                    .start_overlaps_with_part_of(sm.segment, MIN_FLANK)
+                                {
                                     has_exin_intron_span = true;
                                 }
                             }
@@ -502,7 +506,9 @@ impl Logic for ValidatedIntrons10X {
                             let ds_idx = feat.get_downstream_exon_idx(tm);
                             if ds_idx < tm.list_features.len() {
                                 let downstream_exon = &tm.list_features[ds_idx];
-                                if downstream_exon.start_overlaps_with_part_of(sm.segment, MIN_FLANK) {
+                                if downstream_exon
+                                    .start_overlaps_with_part_of(sm.segment, MIN_FLANK)
+                                {
                                     has_exin_intron_span = true;
                                 }
                             }
@@ -692,7 +698,9 @@ impl Logic for Stricter10X {
                             let ds_idx = feat.get_downstream_exon_idx(tm);
                             if ds_idx < tm.list_features.len() {
                                 let downstream_exon = &tm.list_features[ds_idx];
-                                if downstream_exon.start_overlaps_with_part_of(sm.segment, MIN_FLANK) {
+                                if downstream_exon
+                                    .start_overlaps_with_part_of(sm.segment, MIN_FLANK)
+                                {
                                     has_exin_intron_span = true;
                                 }
                             }
@@ -885,7 +893,9 @@ impl Logic for ObservedSpanning10X {
                             let ds_idx = feat.get_downstream_exon_idx(tm);
                             if ds_idx < tm.list_features.len() {
                                 let downstream_exon = &tm.list_features[ds_idx];
-                                if downstream_exon.start_overlaps_with_part_of(sm.segment, MIN_FLANK) {
+                                if downstream_exon
+                                    .start_overlaps_with_part_of(sm.segment, MIN_FLANK)
+                                {
                                     has_exin_intron_span = true;
                                 }
                             }
@@ -1075,7 +1085,9 @@ impl Logic for Discordant10X {
                             let ds_idx = feat.get_downstream_exon_idx(tm);
                             if ds_idx < tm.list_features.len() {
                                 let downstream_exon = &tm.list_features[ds_idx];
-                                if downstream_exon.start_overlaps_with_part_of(sm.segment, MIN_FLANK) {
+                                if downstream_exon
+                                    .start_overlaps_with_part_of(sm.segment, MIN_FLANK)
+                                {
                                     has_exin_intron_span = true;
                                 }
                             }

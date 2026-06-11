@@ -28,7 +28,11 @@ fn main() -> anyhow::Result<()> {
         Commands::RunSmartseq2(a) => a.verbose,
         Commands::DropestBcCorrect(a) => a.verbose,
     };
-    let level = if verbose { log::LevelFilter::Debug } else { log::LevelFilter::Info };
+    let level = if verbose {
+        log::LevelFilter::Debug
+    } else {
+        log::LevelFilter::Info
+    };
     env_logger::builder().filter_level(level).init();
     match cli.command {
         Commands::Run(args) => velocyto::commands::run::run(args),

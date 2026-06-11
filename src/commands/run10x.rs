@@ -124,6 +124,7 @@ pub fn run10x(args: Run10xArgs) -> anyhow::Result<()> {
         &[],
         args.cb_tag.as_deref(),
         args.ub_tag.as_deref(),
+        None,
     )
 }
 

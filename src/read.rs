@@ -5,6 +5,9 @@
 pub struct Read {
     pub bc: String,
     pub umi: String,
+    /// Sample tag value (e.g. BD Rhapsody `ST`). Empty string when sample
+    /// demultiplexing is disabled or the read carries no sample tag.
+    pub sample: String,
     pub chrom: String,
     pub strand: char,
     pub pos: i64,
@@ -19,6 +22,7 @@ impl Read {
     pub fn new(
         bc: String,
         umi: String,
+        sample: String,
         chrom: String,
         strand: char,
         pos: i64,
@@ -30,6 +34,7 @@ impl Read {
         Read {
             bc,
             umi,
+            sample,
             chrom,
             strand,
             pos,

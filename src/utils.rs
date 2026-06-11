@@ -58,8 +58,7 @@ pub fn jump_next_3p_exon<'a>(
     let ix: usize = if tm.chromstrand.ends_with('+') {
         (feature.exin_no * 2) as usize
     } else {
-        let ix_signed =
-            tm.list_features.len() as i64 - 2 * (feature.exin_no - 1) - 3;
+        let ix_signed = tm.list_features.len() as i64 - 2 * (feature.exin_no - 1) - 3;
         if ix_signed < 0 {
             return None; // mirrors Python `raise IndexError`
         }
@@ -196,10 +195,7 @@ pub fn spliced_iter(mut segments_list: Vec<SegmentMatch>, read_len: i64) -> Vec<
             // Keep accumulating spliced segments until the list is exhausted or
             // we've consumed enough bases, matching Python's while loop.
             while !segments_list.is_empty() && segments_list[0].is_spliced {
-                let total_len: i64 = sm_list
-                    .iter()
-                    .map(|s| s.segment.1 - s.segment.0 + 1)
-                    .sum();
+                let total_len: i64 = sm_list.iter().map(|s| s.segment.1 - s.segment.0 + 1).sum();
                 // Python: sum(...) + segments_list[0] > read_len
                 // segments_list[0] here is the *next* SegmentMatch object being added;
                 // the Python comparison is effectively a break-guard before popping.
@@ -217,8 +213,7 @@ pub fn spliced_iter(mut segments_list: Vec<SegmentMatch>, read_len: i64) -> Vec<
 
             let strand = &{
                 // borrow the feature's tm to get strand character
-                sm_list[0].feature.transcript_model_idx
-                    .map(|_| ()) // just a placeholder; we read strand from feature below
+                sm_list[0].feature.transcript_model_idx.map(|_| ()) // just a placeholder; we read strand from feature below
             };
             let _ = strand; // suppress unused warning
 
@@ -316,10 +311,7 @@ pub fn spliced_iter_with_tms(
             let mut sm_list: Vec<SegmentMatch> = vec![sm];
 
             while !segments_list.is_empty() && segments_list[0].is_spliced {
-                let total_len: i64 = sm_list
-                    .iter()
-                    .map(|s| s.segment.1 - s.segment.0 + 1)
-                    .sum();
+                let total_len: i64 = sm_list.iter().map(|s| s.segment.1 - s.segment.0 + 1).sum();
                 if total_len > read_len {
                     break;
                 }

@@ -79,6 +79,12 @@ pub struct RunArgs {
     /// BAM tag for UMI barcode (overrides auto-detection; e.g. `UB` or `XM`)
     #[arg(long)]
     pub ub_tag: Option<String>,
+    /// BAM tag carrying the sample identity for demultiplexing a multi-sample
+    /// BAM in place (e.g. BD Rhapsody `ST`). When set, the cell identity becomes
+    /// `(sample, barcode)`, CellIDs are formatted `{sampleid}_{sample}:{bc}`,
+    /// and a `SampleID` column attribute is added. Omit for single-sample BAMs.
+    #[arg(long)]
+    pub sample_tag: Option<String>,
 }
 
 /// Runs the velocity analysis for generic BAM input.
@@ -104,6 +110,7 @@ pub fn run(args: RunArgs) -> anyhow::Result<()> {
         &[],
         args.cb_tag.as_deref(),
         args.ub_tag.as_deref(),
+        args.sample_tag.as_deref(),
     )
 }
 
@@ -183,6 +190,7 @@ pub fn run_inner(
     additional_ca: &[(&str, Vec<f32>)],
     cb_tag: Option<&str>,
     ub_tag: Option<&str>,
+    sample_tag: Option<&str>,
 ) -> anyhow::Result<()> {
     // ── Resolve inputs ────────────────────────────────────────────────────────
     validate_loom_dtype(loom_numeric_dtype)?;
@@ -251,10 +259,8 @@ pub fn run_inner(
         };
         let bcs: Vec<String> = content.split_whitespace().map(|s| s.to_string()).collect();
         let gem_grp_val = {
-            let suffixes: HashSet<&str> = bcs
-                .iter()
-                .filter_map(|bc| bc.split('-').last())
-                .collect();
+            let suffixes: HashSet<&str> =
+                bcs.iter().filter_map(|bc| bc.split('-').last()).collect();
             if suffixes.len() == 1 {
                 format!("-{}", bcs[0].split('-').last().unwrap_or("1"))
             } else {
@@ -320,6 +326,10 @@ pub fn run_inner(
     }
     if let Some(ub) = ub_tag {
         exincounter.umibarcode_str = ub.to_string();
+    }
+    if let Some(st) = sample_tag {
+        log::info!("Sample demultiplexing enabled on BAM tag '{st}'");
+        exincounter.sample_tag = Some(st.to_string());
     }
 
     // ── Cell-sorted BAM paths ─────────────────────────────────────────────────
@@ -430,16 +440,34 @@ pub fn run_inner(
         all_bcs.extend(cell_bcs_order);
     }
 
-    // ── Build full CellID list: {sampleid}:{bc}{gem_grp} ─────────────────────
+    // ── Build CellID + SampleID lists ─────────────────────────────────────────
+    // Counting keys each cell as "{sample}|{bc}". Split that back into the sample
+    // tag and bare barcode. With demultiplexing off, `sample` is empty and the
+    // CellID format is unchanged ({sampleid}:{bc}{gem_grp}); with it on, the
+    // sample is folded into the CellID and emitted as a SampleID column attr.
     let gem_grp_used = if exincounter.filter_mode {
         gem_grp
     } else {
         String::new()
     };
-    let cell_ids: Vec<String> = all_bcs
-        .iter()
-        .map(|bc| format!("{sampleid}:{bc}{gem_grp_used}"))
-        .collect();
+    let mut cell_ids: Vec<String> = Vec::with_capacity(all_bcs.len());
+    let mut sample_ids: Vec<String> = Vec::with_capacity(all_bcs.len());
+    let mut any_sample = false;
+    for key in &all_bcs {
+        let (sample, bc) = key.split_once('|').unwrap_or(("", key.as_str()));
+        if sample.is_empty() {
+            cell_ids.push(format!("{sampleid}:{bc}{gem_grp_used}"));
+        } else {
+            any_sample = true;
+            cell_ids.push(format!("{sampleid}_{sample}:{bc}{gem_grp_used}"));
+        }
+        sample_ids.push(sample.to_string());
+    }
+    let sample_ids_opt = if any_sample {
+        Some(sample_ids.as_slice())
+    } else {
+        None
+    };
 
     // ── Write loom ────────────────────────────────────────────────────────────
     let outfile = Path::new(&outputfolder)
@@ -447,7 +475,7 @@ pub fn run_inner(
         .to_string_lossy()
         .to_string();
     log::info!("Writing output to {outfile}");
-    exincounter.dump_loom(&outfile, &all_layers, &cell_ids)?;
+    exincounter.dump_loom(&outfile, &all_layers, &cell_ids, sample_ids_opt)?;
 
     let _ = additional_ca; // float col attrs not yet supported by hdf5-pure-rust string-only API
 
@@ -478,6 +506,7 @@ pub fn run_inner(
     _additional_ca: &[(&str, Vec<f32>)],
     _cb_tag: Option<&str>,
     _ub_tag: Option<&str>,
+    _sample_tag: Option<&str>,
 ) -> anyhow::Result<()> {
     anyhow::bail!("BAM support required. Recompile with: cargo build --features bam")
 }
@@ -578,10 +607,8 @@ mod tests {
     // ── barcode parsing (gem_grp logic extracted for testing) ─────────────────
 
     fn parse_gem_grp(bcs: &[&str]) -> String {
-        let suffixes: std::collections::HashSet<&str> = bcs
-            .iter()
-            .filter_map(|bc| bc.split('-').last())
-            .collect();
+        let suffixes: std::collections::HashSet<&str> =
+            bcs.iter().filter_map(|bc| bc.split('-').last()).collect();
         if suffixes.len() == 1 {
             format!("-{}", bcs[0].split('-').last().unwrap_or("1"))
         } else {
@@ -730,7 +757,13 @@ mod tests {
     #[test]
     fn cb_ub_tag_flags_parse_explicit_values() {
         let args = parse_run_args(&[
-            "cmd", "sample.bam", "ref.gtf", "--cb-tag", "CR", "--ub-tag", "UR",
+            "cmd",
+            "sample.bam",
+            "ref.gtf",
+            "--cb-tag",
+            "CR",
+            "--ub-tag",
+            "UR",
         ]);
         assert_eq!(args.cb_tag.as_deref(), Some("CR"));
         assert_eq!(args.ub_tag.as_deref(), Some("UR"));
@@ -797,5 +830,59 @@ mod tests {
                 "expected '{bad}' to be rejected"
             );
         }
+    }
+
+    // ── sample-tag demultiplexing: composite cell-key → CellID / SampleID ──────
+    //
+    // Mirrors the inline logic in `run_inner` that splits each "{sample}|{bc}"
+    // counting key into a CellID and a SampleID. Kept in sync by hand, in the
+    // same test-only style as `parse_gem_grp` / `derive_sampleid` above.
+
+    fn derive_cellids(
+        all_bcs: &[&str],
+        sampleid: &str,
+        gem_grp: &str,
+    ) -> (Vec<String>, Vec<String>, bool) {
+        let mut cell_ids = Vec::new();
+        let mut sample_ids = Vec::new();
+        let mut any_sample = false;
+        for key in all_bcs {
+            let (sample, bc) = key.split_once('|').unwrap_or(("", key));
+            if sample.is_empty() {
+                cell_ids.push(format!("{sampleid}:{bc}{gem_grp}"));
+            } else {
+                any_sample = true;
+                cell_ids.push(format!("{sampleid}_{sample}:{bc}{gem_grp}"));
+            }
+            sample_ids.push(sample.to_string());
+        }
+        (cell_ids, sample_ids, any_sample)
+    }
+
+    #[test]
+    fn cellid_single_sample_keeps_legacy_format() {
+        // sample empty → unchanged CellID, no SampleID attr written.
+        let (cell_ids, sample_ids, any_sample) =
+            derive_cellids(&["|ACGT", "|TTTT"], "mysample", "-1");
+        assert_eq!(cell_ids, vec!["mysample:ACGT-1", "mysample:TTTT-1"]);
+        assert_eq!(sample_ids, vec!["", ""]);
+        assert!(!any_sample);
+    }
+
+    #[test]
+    fn cellid_multi_sample_folds_sample_into_id() {
+        let (cell_ids, sample_ids, any_sample) =
+            derive_cellids(&["S1|ACGT", "S2|ACGT"], "mysample", "");
+        // Same barcode in two samples must yield distinct CellIDs (no collision).
+        assert_eq!(cell_ids, vec!["mysample_S1:ACGT", "mysample_S2:ACGT"]);
+        assert_ne!(cell_ids[0], cell_ids[1]);
+        assert_eq!(sample_ids, vec!["S1", "S2"]);
+        assert!(any_sample);
+    }
+
+    #[test]
+    fn cellid_multi_sample_preserves_gem_group_suffix() {
+        let (cell_ids, _, _) = derive_cellids(&["S1|ACGT"], "mysample", "-1");
+        assert_eq!(cell_ids, vec!["mysample_S1:ACGT-1"]);
     }
 }

@@ -42,6 +42,9 @@ pub struct Run10xArgs {
     /// dtype for loom layer arrays: "uint32" (default, lossless) or "uint16" (smaller, saturates at 65535)
     #[arg(short = 't', long, default_value = "uint32")]
     pub dtype: String,
+    /// Output file format: "h5ad" (default, AnnData), "loom", or "both"
+    #[arg(long, default_value = "h5ad")]
+    pub output_format: String,
     /// Debug dump: save a molecular mapping report every N cells (0 = disabled)
     #[arg(short = 'd', long, default_value = "0")]
     pub dump: String,
@@ -97,9 +100,20 @@ pub fn run10x(args: Run10xArgs) -> anyhow::Result<()> {
         })
         .unwrap_or_else(|| "sample".to_string());
 
-    let loom_out = Path::new(&outputfolder).join(format!("{sampleid}.loom"));
-    if loom_out.exists() {
-        bail!("Output already exists: {}. Aborted!", loom_out.display());
+    // Abort if any output we are about to write already exists.
+    for ext in ["loom", "h5ad"] {
+        let want = match (ext, args.output_format.as_str()) {
+            ("loom", "loom" | "both") => true,
+            ("h5ad", "h5ad" | "both") => true,
+            _ => false,
+        };
+        if !want {
+            continue;
+        }
+        let out = Path::new(&outputfolder).join(format!("{sampleid}.{ext}"));
+        if out.exists() {
+            bail!("Output already exists: {}. Aborted!", out.display());
+        }
     }
 
     // Note: Python also loads tsne/clusters files into additional_ca (_X, _Y, Clusters).
@@ -125,6 +139,7 @@ pub fn run10x(args: Run10xArgs) -> anyhow::Result<()> {
         args.cb_tag.as_deref(),
         args.ub_tag.as_deref(),
         None,
+        &args.output_format,
     )
 }
 

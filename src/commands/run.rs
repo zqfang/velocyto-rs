@@ -70,6 +70,9 @@ pub struct RunArgs {
     /// dtype for loom layer arrays: "uint32" (default, lossless) or "uint16" (smaller, saturates at 65535)
     #[arg(short = 't', long, default_value = "uint32")]
     pub dtype: String,
+    /// Output file format: "h5ad" (default, AnnData), "loom", or "both"
+    #[arg(long, default_value = "h5ad")]
+    pub output_format: String,
     /// Debug dump: save a molecular mapping report every N cells (0 = disabled)
     #[arg(short = 'd', long, default_value = "0")]
     pub dump: String,
@@ -111,6 +114,7 @@ pub fn run(args: RunArgs) -> anyhow::Result<()> {
         args.cb_tag.as_deref(),
         args.ub_tag.as_deref(),
         args.sample_tag.as_deref(),
+        &args.output_format,
     )
 }
 
@@ -191,9 +195,11 @@ pub fn run_inner(
     cb_tag: Option<&str>,
     ub_tag: Option<&str>,
     sample_tag: Option<&str>,
+    output_format: &str,
 ) -> anyhow::Result<()> {
     // ── Resolve inputs ────────────────────────────────────────────────────────
     validate_loom_dtype(loom_numeric_dtype)?;
+    validate_output_format(output_format)?;
 
     let multi = bamfile.len() > 1;
 
@@ -469,13 +475,27 @@ pub fn run_inner(
         None
     };
 
-    // ── Write loom ────────────────────────────────────────────────────────────
-    let outfile = Path::new(&outputfolder)
-        .join(format!("{sampleid}.loom"))
-        .to_string_lossy()
-        .to_string();
-    log::info!("Writing output to {outfile}");
-    exincounter.dump_loom(&outfile, &all_layers, &cell_ids, sample_ids_opt)?;
+    // ── Write output ──────────────────────────────────────────────────────────
+    // `output_format` selects loom, h5ad (default), or both. h5ad is the modern
+    // AnnData format; loom is kept for backward compatibility.
+    let want_loom = matches!(output_format, "loom" | "both");
+    let want_h5ad = matches!(output_format, "h5ad" | "both");
+    if want_loom {
+        let outfile = Path::new(&outputfolder)
+            .join(format!("{sampleid}.loom"))
+            .to_string_lossy()
+            .to_string();
+        log::info!("Writing loom output to {outfile}");
+        exincounter.dump_loom(&outfile, &all_layers, &cell_ids, sample_ids_opt)?;
+    }
+    if want_h5ad {
+        let outfile = Path::new(&outputfolder)
+            .join(format!("{sampleid}.h5ad"))
+            .to_string_lossy()
+            .to_string();
+        log::info!("Writing h5ad output to {outfile}");
+        exincounter.dump_anndata(&outfile, &all_layers, &cell_ids, sample_ids_opt)?;
+    }
 
     let _ = additional_ca; // float col attrs not yet supported by hdf5-pure-rust string-only API
 
@@ -507,6 +527,7 @@ pub fn run_inner(
     _cb_tag: Option<&str>,
     _ub_tag: Option<&str>,
     _sample_tag: Option<&str>,
+    _output_format: &str,
 ) -> anyhow::Result<()> {
     anyhow::bail!("BAM support required. Recompile with: cargo build --features bam")
 }
@@ -557,6 +578,21 @@ fn validate_loom_dtype(dtype: &str) -> anyhow::Result<()> {
         Ok(())
     } else {
         bail!("Invalid --dtype '{dtype}'. Supported values: \"uint32\" (default) or \"uint16\".")
+    }
+}
+
+/// Validate the `--output-format` value.
+///
+/// Only `"h5ad"` (default, AnnData), `"loom"`, and `"both"` are supported. Any
+/// other value is rejected rather than silently coerced.
+fn validate_output_format(format: &str) -> anyhow::Result<()> {
+    if matches!(format, "h5ad" | "loom" | "both") {
+        Ok(())
+    } else {
+        bail!(
+            "Invalid --output-format '{format}'. Supported values: \"h5ad\" (default), \
+             \"loom\", or \"both\"."
+        )
     }
 }
 

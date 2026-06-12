@@ -46,6 +46,9 @@ pub struct RunDropestArgs {
     /// dtype for loom layer arrays: "uint32" (default, lossless) or "uint16" (smaller, saturates at 65535)
     #[arg(short = 't', long, default_value = "uint32")]
     pub dtype: String,
+    /// Output file format: "h5ad" (default, AnnData), "loom", or "both"
+    #[arg(long, default_value = "h5ad")]
+    pub output_format: String,
     /// Debug dump: save a molecular mapping report every N cells (0 = disabled)
     #[arg(short = 'd', long, default_value = "0")]
     pub dump: String,
@@ -116,5 +119,6 @@ pub fn run_dropest(args: RunDropestArgs) -> anyhow::Result<()> {
         None,
         None,
         None,
+        &args.output_format,
     )
 }

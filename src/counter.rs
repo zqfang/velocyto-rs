@@ -1731,6 +1731,361 @@ impl ExInCounter {
         Ok(())
     }
 
+    /// Write the counted matrices to an AnnData `.h5ad` file.
+    ///
+    /// This has no counterpart in velocyto.py v0.17.16 (upstream only ever
+    /// emitted loom via loompy) — it is a deliberate extension, alongside
+    /// `--sample-tag`, so the port stays usable with the modern scanpy/scVelo
+    /// ecosystem. It takes exactly the same inputs as [`Self::dump_loom`].
+    ///
+    /// # Layout vs loom
+    /// AnnData is **cells × genes** (obs × var) — the transpose of loom's
+    /// genes × cells. `X` is the per-cell/per-gene sum of all layers (float32);
+    /// each layer (spliced/unspliced/ambiguous) is written under `layers/`. All
+    /// matrices are stored as sparse CSR (`data`/`indices`/`indptr`) because a
+    /// dense single-cell matrix is mostly zeros. `var` is indexed by `Accession`
+    /// (unique Ensembl id), not `Gene` (names collide), mirroring the alignment
+    /// rule used when diffing outputs.
+    ///
+    /// # Encoding versions
+    /// The element `encoding-type`/`encoding-version` attributes target the
+    /// current anndata on-disk spec: anndata 0.1.0, csr_matrix 0.1.0, dict
+    /// 0.1.0, dataframe 0.2.0, array 0.2.0, string-array 0.2.0. Verify with an
+    /// `anndata.read_h5ad` round-trip when bumping anndata.
+    pub fn dump_anndata(
+        &self,
+        outfile: &str,
+        dict_list_arrays: &HashMap<String, Vec<ndarray::Array2<u32>>>,
+        cell_bcs_order: &[String],
+        sample_ids: Option<&[String]>,
+    ) -> anyhow::Result<()> {
+        use hdf5_pure_rust::WritableFile;
+        use ndarray::Array2;
+
+        // anndata on-disk encoding versions (see doc comment).
+        const EV_ANNDATA: &str = "0.1.0";
+        const EV_CSR: &str = "0.1.0";
+        const EV_DICT: &str = "0.1.0";
+        const EV_DATAFRAME: &str = "0.2.0";
+        const EV_ARRAY: &str = "0.2.0";
+        const EV_STRING_ARRAY: &str = "0.2.0";
+        const CHUNK_CAP: usize = 1 << 16;
+
+        // Concatenate batches horizontally per layer (genes × cells), identical
+        // to dump_loom.
+        let mut layers: HashMap<String, Array2<u32>> = HashMap::new();
+        for (layer_name, arrays) in dict_list_arrays {
+            if arrays.is_empty() {
+                layers.insert(layer_name.clone(), Array2::zeros((self.geneid2ix.len(), 0)));
+                continue;
+            }
+            let views: Vec<ndarray::ArrayView2<u32>> = arrays.iter().map(|a| a.view()).collect();
+            let concatenated = ndarray::concatenate(ndarray::Axis(1), &views)
+                .map_err(|e| anyhow::anyhow!("Concatenation error: {e}"))?;
+            layers.insert(layer_name.clone(), concatenated);
+        }
+
+        let n_genes = self.geneid2ix.len();
+        let n_cells = layers.values().next().map(|a| a.dim().1).unwrap_or(0);
+
+        let mut gene_ids: Vec<String> = vec![String::new(); n_genes];
+        let mut gene_names: Vec<String> = vec![String::new(); n_genes];
+        let mut chromosomes: Vec<String> = vec![String::new(); n_genes];
+        let mut strands: Vec<String> = vec![String::new(); n_genes];
+        let mut starts: Vec<i64> = vec![0; n_genes];
+        let mut ends: Vec<i64> = vec![0; n_genes];
+        for (geneid, &ix) in &self.geneid2ix {
+            gene_ids[ix] = geneid.clone();
+            if let Some(gi) = self.genes.get(geneid) {
+                gene_names[ix] = gi.genename.clone();
+                chromosomes[ix] = gi.chrom.clone();
+                strands[ix] = gi.strand.to_string();
+                starts[ix] = gi.start;
+                ends[ix] = gi.end;
+            }
+        }
+
+        if std::path::Path::new(outfile).exists() {
+            std::fs::remove_file(outfile)?;
+        }
+        let mut wf = WritableFile::create(outfile)
+            .map_err(|e| anyhow::anyhow!("HDF5 create error: {e:?}"))?;
+
+        // Root: encoding-type=anndata.
+        wf.add_fixed_utf8_attr("encoding-type", "anndata", "anndata".len())
+            .map_err(|e| anyhow::anyhow!("HDF5 root encoding-type: {e:?}"))?;
+        wf.add_fixed_utf8_attr("encoding-version", EV_ANNDATA, EV_ANNDATA.len())
+            .map_err(|e| anyhow::anyhow!("HDF5 root encoding-version: {e:?}"))?;
+
+        // CSR conversion of a genes×cells matrix into cells×genes component
+        // vectors. AnnData rows are cells, so we walk cell-by-cell collecting
+        // each cell's nonzero genes (values kept as u32; narrowed at write).
+        let to_csr = |arr: &Array2<u32>| -> (Vec<i32>, Vec<i32>, Vec<u32>) {
+            let (n_g, n_c) = arr.dim();
+            let mut indptr: Vec<i32> = Vec::with_capacity(n_c + 1);
+            let mut indices: Vec<i32> = Vec::new();
+            let mut data: Vec<u32> = Vec::new();
+            indptr.push(0);
+            for c in 0..n_c {
+                for g in 0..n_g {
+                    let v = arr[(g, c)];
+                    if v != 0 {
+                        indices.push(g as i32);
+                        data.push(v);
+                    }
+                }
+                indptr.push(data.len() as i32);
+            }
+            (indptr, indices, data)
+        };
+
+        // X = sum of all layers (float32), sparse CSR.
+        {
+            let mut total: Array2<f32> = Array2::zeros((n_genes, n_cells));
+            for arr in layers.values() {
+                total = total + arr.mapv(|v| v as f32);
+            }
+            let mut indptr: Vec<i32> = Vec::with_capacity(n_cells + 1);
+            let mut indices: Vec<i32> = Vec::new();
+            let mut data: Vec<f32> = Vec::new();
+            indptr.push(0);
+            for c in 0..n_cells {
+                for g in 0..n_genes {
+                    let v = total[(g, c)];
+                    if v != 0.0 {
+                        indices.push(g as i32);
+                        data.push(v);
+                    }
+                }
+                indptr.push(data.len() as i32);
+            }
+            let mut xg = wf
+                .create_group("X")
+                .map_err(|e| anyhow::anyhow!("HDF5 create X: {e:?}"))?;
+            xg.add_fixed_utf8_attr("encoding-type", "csr_matrix", "csr_matrix".len())
+                .map_err(|e| anyhow::anyhow!("HDF5 X encoding-type: {e:?}"))?;
+            xg.add_fixed_utf8_attr("encoding-version", EV_CSR, EV_CSR.len())
+                .map_err(|e| anyhow::anyhow!("HDF5 X encoding-version: {e:?}"))?;
+            xg.add_attr_array::<i64>("shape", &[n_cells as i64, n_genes as i64])
+                .map_err(|e| anyhow::anyhow!("HDF5 X shape: {e:?}"))?;
+            let nd = data.len();
+            let mut db = xg.new_dataset_builder("data").shape(&[nd as u64]);
+            if nd > 0 {
+                db = db.chunk(&[nd.min(CHUNK_CAP) as u64]).deflate(2);
+            }
+            db.write::<f32>(&data)
+                .map_err(|e| anyhow::anyhow!("HDF5 X/data: {e:?}"))?;
+            let ni = indices.len();
+            let mut ib = xg.new_dataset_builder("indices").shape(&[ni as u64]);
+            if ni > 0 {
+                ib = ib.chunk(&[ni.min(CHUNK_CAP) as u64]).deflate(2);
+            }
+            ib.write::<i32>(&indices)
+                .map_err(|e| anyhow::anyhow!("HDF5 X/indices: {e:?}"))?;
+            let np = indptr.len();
+            xg.new_dataset_builder("indptr")
+                .shape(&[np as u64])
+                .chunk(&[np.min(CHUNK_CAP) as u64])
+                .deflate(2)
+                .write::<i32>(&indptr)
+                .map_err(|e| anyhow::anyhow!("HDF5 X/indptr: {e:?}"))?;
+        }
+
+        // layers/ — one CSR sub-group per layer (spliced/unspliced/ambiguous).
+        // Output element width follows --dtype: uint32 (lossless) or uint16
+        // (saturating at 65535, matching dump_loom).
+        {
+            let narrow = self.loom_numeric_dtype == "uint16";
+            let mut lg = wf
+                .create_group("layers")
+                .map_err(|e| anyhow::anyhow!("HDF5 create layers: {e:?}"))?;
+            lg.add_fixed_utf8_attr("encoding-type", "dict", "dict".len())
+                .map_err(|e| anyhow::anyhow!("HDF5 layers encoding-type: {e:?}"))?;
+            lg.add_fixed_utf8_attr("encoding-version", EV_DICT, EV_DICT.len())
+                .map_err(|e| anyhow::anyhow!("HDF5 layers encoding-version: {e:?}"))?;
+            let mut sorted_layer_names: Vec<&String> = layers.keys().collect();
+            sorted_layer_names.sort();
+            for layer_name in sorted_layer_names {
+                let (indptr, indices, data) = to_csr(&layers[layer_name]);
+                let mut sg = lg
+                    .create_group(layer_name)
+                    .map_err(|e| anyhow::anyhow!("HDF5 create layers/{layer_name}: {e:?}"))?;
+                sg.add_fixed_utf8_attr("encoding-type", "csr_matrix", "csr_matrix".len())
+                    .map_err(|e| anyhow::anyhow!("HDF5 layer encoding-type: {e:?}"))?;
+                sg.add_fixed_utf8_attr("encoding-version", EV_CSR, EV_CSR.len())
+                    .map_err(|e| anyhow::anyhow!("HDF5 layer encoding-version: {e:?}"))?;
+                sg.add_attr_array::<i64>("shape", &[n_cells as i64, n_genes as i64])
+                    .map_err(|e| anyhow::anyhow!("HDF5 layer shape: {e:?}"))?;
+                let nd = data.len();
+                if narrow {
+                    let overflow = data.iter().filter(|&&v| v > u16::MAX as u32).count();
+                    if overflow > 0 {
+                        warn!(
+                            "Layer '{layer_name}': {overflow} value(s) exceed 65535 and were \
+                             saturated by --dtype uint16; use --dtype uint32 to avoid loss"
+                        );
+                    }
+                    let narrowed: Vec<u16> = data
+                        .iter()
+                        .map(|&v| v.min(u16::MAX as u32) as u16)
+                        .collect();
+                    let mut db = sg.new_dataset_builder("data").shape(&[nd as u64]);
+                    if nd > 0 {
+                        db = db.chunk(&[nd.min(CHUNK_CAP) as u64]).deflate(2);
+                    }
+                    db.write::<u16>(&narrowed)
+                        .map_err(|e| anyhow::anyhow!("HDF5 layers/{layer_name}/data: {e:?}"))?;
+                } else {
+                    let mut db = sg.new_dataset_builder("data").shape(&[nd as u64]);
+                    if nd > 0 {
+                        db = db.chunk(&[nd.min(CHUNK_CAP) as u64]).deflate(2);
+                    }
+                    db.write::<u32>(&data)
+                        .map_err(|e| anyhow::anyhow!("HDF5 layers/{layer_name}/data: {e:?}"))?;
+                }
+                let ni = indices.len();
+                let mut ib = sg.new_dataset_builder("indices").shape(&[ni as u64]);
+                if ni > 0 {
+                    ib = ib.chunk(&[ni.min(CHUNK_CAP) as u64]).deflate(2);
+                }
+                ib.write::<i32>(&indices)
+                    .map_err(|e| anyhow::anyhow!("HDF5 layers/{layer_name}/indices: {e:?}"))?;
+                let np = indptr.len();
+                sg.new_dataset_builder("indptr")
+                    .shape(&[np as u64])
+                    .chunk(&[np.min(CHUNK_CAP) as u64])
+                    .deflate(2)
+                    .write::<i32>(&indptr)
+                    .map_err(|e| anyhow::anyhow!("HDF5 layers/{layer_name}/indptr: {e:?}"))?;
+            }
+        }
+
+        // obs/ — cells dataframe, indexed by CellID under `_index`.
+        {
+            let cell_slices: Vec<&str> = cell_bcs_order.iter().map(|s| s.as_str()).collect();
+            let cols: Vec<&str> = if sample_ids.is_some() {
+                vec!["SampleID"]
+            } else {
+                vec![]
+            };
+            let col_len = cols.iter().map(|s| s.len()).max().unwrap_or(1).max(1);
+            let mut og = wf
+                .create_group("obs")
+                .map_err(|e| anyhow::anyhow!("HDF5 create obs: {e:?}"))?;
+            og.add_fixed_utf8_attr("encoding-type", "dataframe", "dataframe".len())
+                .map_err(|e| anyhow::anyhow!("HDF5 obs encoding-type: {e:?}"))?;
+            og.add_fixed_utf8_attr("encoding-version", EV_DATAFRAME, EV_DATAFRAME.len())
+                .map_err(|e| anyhow::anyhow!("HDF5 obs encoding-version: {e:?}"))?;
+            og.add_fixed_utf8_attr("_index", "_index", "_index".len())
+                .map_err(|e| anyhow::anyhow!("HDF5 obs _index attr: {e:?}"))?;
+            og.add_fixed_utf8_attr_array("column-order", &cols, col_len)
+                .map_err(|e| anyhow::anyhow!("HDF5 obs column-order: {e:?}"))?;
+            og.new_dataset_builder("_index")
+                .fixed_utf8_attr("encoding-type", "string-array", "string-array".len())
+                .map_err(|e| anyhow::anyhow!("HDF5 obs/_index attr: {e:?}"))?
+                .fixed_utf8_attr("encoding-version", EV_STRING_ARRAY, EV_STRING_ARRAY.len())
+                .map_err(|e| anyhow::anyhow!("HDF5 obs/_index version: {e:?}"))?
+                .write_vlen_utf8_strings(&cell_slices)
+                .map_err(|e| anyhow::anyhow!("HDF5 obs/_index data: {e:?}"))?;
+            if let Some(samples) = sample_ids {
+                let sample_slices: Vec<&str> = samples.iter().map(|s| s.as_str()).collect();
+                og.new_dataset_builder("SampleID")
+                    .fixed_utf8_attr("encoding-type", "string-array", "string-array".len())
+                    .map_err(|e| anyhow::anyhow!("HDF5 obs/SampleID attr: {e:?}"))?
+                    .fixed_utf8_attr("encoding-version", EV_STRING_ARRAY, EV_STRING_ARRAY.len())
+                    .map_err(|e| anyhow::anyhow!("HDF5 obs/SampleID version: {e:?}"))?
+                    .write_vlen_utf8_strings(&sample_slices)
+                    .map_err(|e| anyhow::anyhow!("HDF5 obs/SampleID data: {e:?}"))?;
+            }
+        }
+
+        // var/ — genes dataframe, indexed by Accession (unique Ensembl id).
+        {
+            let chunk = (CHUNK_CAP.min(n_genes)).max(1) as u64;
+            let gene_slices: Vec<&str> = gene_names.iter().map(|s| s.as_str()).collect();
+            let id_slices: Vec<&str> = gene_ids.iter().map(|s| s.as_str()).collect();
+            let chr_slices: Vec<&str> = chromosomes.iter().map(|s| s.as_str()).collect();
+            let strand_slices: Vec<&str> = strands.iter().map(|s| s.as_str()).collect();
+            let cols = ["Gene", "Chromosome", "Strand", "Start", "End"];
+            let col_len = cols.iter().map(|s| s.len()).max().unwrap_or(1).max(1);
+            let mut vg = wf
+                .create_group("var")
+                .map_err(|e| anyhow::anyhow!("HDF5 create var: {e:?}"))?;
+            vg.add_fixed_utf8_attr("encoding-type", "dataframe", "dataframe".len())
+                .map_err(|e| anyhow::anyhow!("HDF5 var encoding-type: {e:?}"))?;
+            vg.add_fixed_utf8_attr("encoding-version", EV_DATAFRAME, EV_DATAFRAME.len())
+                .map_err(|e| anyhow::anyhow!("HDF5 var encoding-version: {e:?}"))?;
+            vg.add_fixed_utf8_attr("_index", "Accession", "Accession".len())
+                .map_err(|e| anyhow::anyhow!("HDF5 var _index attr: {e:?}"))?;
+            vg.add_fixed_utf8_attr_array("column-order", &cols, col_len)
+                .map_err(|e| anyhow::anyhow!("HDF5 var column-order: {e:?}"))?;
+            vg.new_dataset_builder("Accession")
+                .fixed_utf8_attr("encoding-type", "string-array", "string-array".len())
+                .map_err(|e| anyhow::anyhow!("HDF5 var/Accession attr: {e:?}"))?
+                .fixed_utf8_attr("encoding-version", EV_STRING_ARRAY, EV_STRING_ARRAY.len())
+                .map_err(|e| anyhow::anyhow!("HDF5 var/Accession version: {e:?}"))?
+                .write_vlen_utf8_strings(&id_slices)
+                .map_err(|e| anyhow::anyhow!("HDF5 var/Accession data: {e:?}"))?;
+            vg.new_dataset_builder("Gene")
+                .fixed_utf8_attr("encoding-type", "string-array", "string-array".len())
+                .map_err(|e| anyhow::anyhow!("HDF5 var/Gene attr: {e:?}"))?
+                .fixed_utf8_attr("encoding-version", EV_STRING_ARRAY, EV_STRING_ARRAY.len())
+                .map_err(|e| anyhow::anyhow!("HDF5 var/Gene version: {e:?}"))?
+                .write_vlen_utf8_strings(&gene_slices)
+                .map_err(|e| anyhow::anyhow!("HDF5 var/Gene data: {e:?}"))?;
+            vg.new_dataset_builder("Chromosome")
+                .fixed_utf8_attr("encoding-type", "string-array", "string-array".len())
+                .map_err(|e| anyhow::anyhow!("HDF5 var/Chromosome attr: {e:?}"))?
+                .fixed_utf8_attr("encoding-version", EV_STRING_ARRAY, EV_STRING_ARRAY.len())
+                .map_err(|e| anyhow::anyhow!("HDF5 var/Chromosome version: {e:?}"))?
+                .write_vlen_utf8_strings(&chr_slices)
+                .map_err(|e| anyhow::anyhow!("HDF5 var/Chromosome data: {e:?}"))?;
+            vg.new_dataset_builder("Strand")
+                .fixed_utf8_attr("encoding-type", "string-array", "string-array".len())
+                .map_err(|e| anyhow::anyhow!("HDF5 var/Strand attr: {e:?}"))?
+                .fixed_utf8_attr("encoding-version", EV_STRING_ARRAY, EV_STRING_ARRAY.len())
+                .map_err(|e| anyhow::anyhow!("HDF5 var/Strand version: {e:?}"))?
+                .write_vlen_utf8_strings(&strand_slices)
+                .map_err(|e| anyhow::anyhow!("HDF5 var/Strand data: {e:?}"))?;
+            vg.new_dataset_builder("Start")
+                .fixed_utf8_attr("encoding-type", "array", "array".len())
+                .map_err(|e| anyhow::anyhow!("HDF5 var/Start attr: {e:?}"))?
+                .fixed_utf8_attr("encoding-version", EV_ARRAY, EV_ARRAY.len())
+                .map_err(|e| anyhow::anyhow!("HDF5 var/Start version: {e:?}"))?
+                .shape(&[n_genes as u64])
+                .chunk(&[chunk])
+                .deflate(2)
+                .write::<i64>(&starts)
+                .map_err(|e| anyhow::anyhow!("HDF5 var/Start data: {e:?}"))?;
+            vg.new_dataset_builder("End")
+                .fixed_utf8_attr("encoding-type", "array", "array".len())
+                .map_err(|e| anyhow::anyhow!("HDF5 var/End attr: {e:?}"))?
+                .fixed_utf8_attr("encoding-version", EV_ARRAY, EV_ARRAY.len())
+                .map_err(|e| anyhow::anyhow!("HDF5 var/End version: {e:?}"))?
+                .shape(&[n_genes as u64])
+                .chunk(&[chunk])
+                .deflate(2)
+                .write::<i64>(&ends)
+                .map_err(|e| anyhow::anyhow!("HDF5 var/End data: {e:?}"))?;
+        }
+
+        // Empty mapping slots anndata expects to exist (uns/obsm/varm/obsp/varp).
+        for gname in ["uns", "obsm", "varm", "obsp", "varp"] {
+            let mut g = wf
+                .create_group(gname)
+                .map_err(|e| anyhow::anyhow!("HDF5 create {gname}: {e:?}"))?;
+            g.add_fixed_utf8_attr("encoding-type", "dict", "dict".len())
+                .map_err(|e| anyhow::anyhow!("HDF5 {gname} encoding-type: {e:?}"))?;
+            g.add_fixed_utf8_attr("encoding-version", EV_DICT, EV_DICT.len())
+                .map_err(|e| anyhow::anyhow!("HDF5 {gname} encoding-version: {e:?}"))?;
+        }
+
+        wf.flush()
+            .map_err(|e| anyhow::anyhow!("HDF5 flush error: {e:?}"))?;
+        debug!("Written h5ad file: {outfile}");
+        Ok(())
+    }
+
     /// UMI extraction dispatch
     #[cfg(feature = "bam")]
     fn extract_umi(&self, rec: &Record) -> anyhow::Result<String> {
@@ -1880,5 +2235,145 @@ mod tests {
         counter.umibarcode_str = "GM".to_string();
         assert_eq!(counter.cellbarcode_str, "GE");
         assert_eq!(counter.umibarcode_str, "GM");
+    }
+
+    // ── h5ad output ───────────────────────────────────────────────────────────
+
+    /// dump_anndata transposes velocyto's genes×cells layout to AnnData's
+    /// cells×genes CSR and writes spec-compliant obs/var dataframes. Round-trips
+    /// through the crate's own reader to confirm the CSR component vectors, the
+    /// var index (Accession, not Gene), and the per-element encoding metadata.
+    #[test]
+    fn dump_anndata_roundtrip() {
+        use crate::gene_info::GeneInfo;
+        use hdf5_pure_rust::File;
+        use ndarray::Array2;
+
+        let mut counter = ExInCounter::new(
+            "test".to_string(),
+            logic_from_name("Default"),
+            None,
+            "no",
+            false,
+            "0",
+            "/tmp".to_string(),
+            "uint32".to_string(),
+        )
+        .unwrap();
+        counter.geneid2ix.insert("ENSG1".to_string(), 0);
+        counter.geneid2ix.insert("ENSG2".to_string(), 1);
+        counter.genes.insert(
+            "ENSG1".to_string(),
+            GeneInfo::new("MIR1".to_string(), "ENSG1".to_string(), "1+", 100, 200),
+        );
+        counter.genes.insert(
+            "ENSG2".to_string(),
+            GeneInfo::new("GENE2".to_string(), "ENSG2".to_string(), "2-", 300, 400),
+        );
+
+        // 2 genes × 3 cells, one batch per layer.
+        let mut layers: HashMap<String, Vec<Array2<u32>>> = HashMap::new();
+        layers.insert(
+            "spliced".to_string(),
+            vec![Array2::from_shape_vec((2, 3), vec![1, 0, 5, 0, 2, 0]).unwrap()],
+        );
+        layers.insert(
+            "unspliced".to_string(),
+            vec![Array2::from_shape_vec((2, 3), vec![0, 0, 0, 3, 0, 0]).unwrap()],
+        );
+        layers.insert("ambiguous".to_string(), vec![Array2::zeros((2, 3))]);
+        let cell_ids = vec![
+            "test:bc1".to_string(),
+            "test:bc2".to_string(),
+            "test:bc3".to_string(),
+        ];
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.h5ad");
+        let path_str = path.to_string_lossy().to_string();
+        counter
+            .dump_anndata(&path_str, &layers, &cell_ids, None)
+            .unwrap();
+
+        let file = File::open(&path).unwrap();
+
+        // X = sum of layers, transposed to cells×genes CSR.
+        // cell0: g0=1,g1=3 ; cell1: g1=2 ; cell2: g0=5.
+        assert_eq!(
+            file.dataset("X/indptr").unwrap().read::<i32>().unwrap(),
+            vec![0, 2, 3, 4]
+        );
+        assert_eq!(
+            file.dataset("X/indices").unwrap().read::<i32>().unwrap(),
+            vec![0, 1, 1, 0]
+        );
+        assert_eq!(
+            file.dataset("X/data").unwrap().read::<f32>().unwrap(),
+            vec![1.0, 3.0, 2.0, 5.0]
+        );
+
+        // spliced layer CSR (cells×genes): cell0 g0=1 ; cell1 g1=2 ; cell2 g0=5.
+        assert_eq!(
+            file.dataset("layers/spliced/indptr")
+                .unwrap()
+                .read::<i32>()
+                .unwrap(),
+            vec![0, 1, 2, 3]
+        );
+        assert_eq!(
+            file.dataset("layers/spliced/indices")
+                .unwrap()
+                .read::<i32>()
+                .unwrap(),
+            vec![0, 1, 0]
+        );
+        assert_eq!(
+            file.dataset("layers/spliced/data")
+                .unwrap()
+                .read::<u32>()
+                .unwrap(),
+            vec![1, 2, 5]
+        );
+
+        // obs index = CellIDs; var index = Accession (not Gene).
+        assert_eq!(
+            file.dataset("obs/_index").unwrap().read_strings().unwrap(),
+            cell_ids
+        );
+        assert_eq!(
+            file.dataset("var/Accession")
+                .unwrap()
+                .read_strings()
+                .unwrap(),
+            vec!["ENSG1".to_string(), "ENSG2".to_string()]
+        );
+        assert_eq!(
+            file.dataset("var/Gene").unwrap().read_strings().unwrap(),
+            vec!["MIR1".to_string(), "GENE2".to_string()]
+        );
+        assert_eq!(
+            file.dataset("var/Strand").unwrap().read_strings().unwrap(),
+            vec!["+".to_string(), "-".to_string()]
+        );
+        assert_eq!(
+            file.dataset("var/Start").unwrap().read::<i64>().unwrap(),
+            vec![100, 300]
+        );
+        assert_eq!(
+            file.dataset("var/End").unwrap().read::<i64>().unwrap(),
+            vec![200, 400]
+        );
+
+        // Per-element encoding metadata is present (anndata refuses files without it).
+        assert!(file
+            .dataset("obs/_index")
+            .unwrap()
+            .attr_exists("encoding-type")
+            .unwrap());
+        assert!(file
+            .dataset("var/Start")
+            .unwrap()
+            .attr_exists("encoding-type")
+            .unwrap());
     }
 }

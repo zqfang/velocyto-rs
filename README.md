@@ -10,14 +10,11 @@ BD Rhapsody single-cell RNA-seq data uses a non-standard, complex cell barcode s
 
 > 🙏 **Heartfelt thanks to Prof. Johan Henriksson ([@mahogny](https://github.com/mahogny))** for the original software translation work that made this project possible. Your contribution and inspiration are deeply appreciated!
 
+## New Feature
 
-## Citation
+* output `anndata` or `loom`
+* add `--cb-tag`, `--ub-tag`, `--sample-tag` to to suport BAM not from 10x (e.g. BD Rhaposody)
 
-If you use this software, cite the original velocyto paper:
-
-> La Manno G, Soldatov R, Zeisel A, Braun E, Hochgerner H, Petukhov V, Lidschreiber K, Kastriti ME, Lönnerberg P, Furlan A, Fan J, Borm LE, Liu Z, van Bruggen D, Guo J, He X, Barker R, Sundström E, Castelo-Branco G, Cramer P, Adameyko I, Linnarsson S, Kharchenko PV.  
-> **RNA velocity of single cells.**  
-> *Nature* 560, 494–498 (2018). https://doi.org/10.1038/s41586-018-0414-6
 
 
 ## Performance
@@ -43,7 +40,7 @@ Comparing Rust vs Python output on the same input (S08, 1974 cells × 39579 gene
 |---|---|
 | Gene set | Identical |
 | Cell barcode set | Identical |
-| Gene row order | Identical (after fix to `assign_indexes_to_genes`) |
+| Gene row order | Identical |
 | Layer counts (spliced/unspliced/ambiguous) | **100% identical** — 0 of 78 M (gene, cell) pairs differ |
 | Layer dtype | Rust uses `uint32` same as Python |
 
@@ -85,7 +82,8 @@ velocyto-rs run10x /data/cellranger/sample1 /ref/gencode.v42.gtf \
     --verbose
 ```
 
-Output is written to `<samplefolder>/velocyto/<samplename>.loom`.
+Output is written to `<samplefolder>/velocyto/<samplename>.h5ad` by default (AnnData).
+Pass `--output-format loom` for the legacy loom file, or `--output-format both` for both.
 
 ### `run` — generic BAM
 
@@ -119,15 +117,64 @@ Key options:
 | `-u / --umi-extension` | `no` | Extend UMI identity: `no`, `chr`, `Gene`, `Cluster`, `all` |
 | `-M / --multimap` | false | Count non-uniquely mapped reads (not recommended) |
 | `-t / --dtype` | `uint32` | Layer array dtype; use `uint16` for low-depth data |
+| `--output-format` | `h5ad` | Output file format: `h5ad` (AnnData), `loom`, or `both` (see [Output formats](#output-formats)) |
 | `--samtools-threads` | 16 | Threads for `samtools sort` |
 | `--samtools-memory` | 2048 | MB per thread for `samtools sort` |
 | `--cb-tag` | auto | BAM tag for cell barcode (e.g. `CB`, `XC`); skips auto-detection when both tags are set |
 | `--ub-tag` | auto | BAM tag for UMI barcode (e.g. `UB`, `XM`); skips auto-detection when both tags are set |
+| `--sample-tag` | — | BAM tag carrying sample identity (e.g. BD Rhapsody `ST`); demultiplexes a multi-sample BAM in place (see [Sample demultiplexing](#sample-demultiplexing)) |
+
+## Output formats
+
+`--output-format` is available on all four run commands (`run10x`, `run`, `run_dropest`, `run_smartseq2`) and accepts:
+
+| Value | Writes | Notes |
+|---|---|---|
+| `h5ad` *(default)* | `<sampleid>.h5ad` | AnnData, the modern scanpy/scVelo on-disk format |
+| `loom` | `<sampleid>.loom` | Legacy loompy format (what upstream velocyto.py emits) |
+| `both` | `<sampleid>.h5ad` and `<sampleid>.loom` | Both files from a single counting pass |
+
+> **Note:** AnnData (h5ad) output is an extension beyond the v0.17.16 port — upstream velocyto only ever emitted loom. The two files carry identical counts; they differ only in on-disk layout.
+
+Both formats are written directly via the bundled pure-Rust HDF5 implementation (`hdf5-pure-rs`) — no C/HDF5 library and no Python dependency at runtime.
+
+### h5ad layout
+
+The h5ad file targets the current anndata on-disk spec and round-trips through `anndata.read_h5ad`:
+
+- **Cells × genes** (`obs` × `var`), the transpose of loom's genes × cells.
+- **Sparse CSR** for `X` and every `layers/{spliced,unspliced,ambiguous}` — a single-cell matrix is mostly zeros, so CSR is far smaller than dense. `X` is the float32 sum of all layers; layer width follows `--dtype` (`uint32` lossless / `uint16` saturating).
+- **`var` indexed by `Accession`** (unique Ensembl ID), with `Gene` as a column. Gene *names* collide (see the alignment note above), so the accession must be the index.
+- **`obs` indexed by `CellID`**; `SampleID` appears as an `obs` column only when `--sample-tag` demultiplexing is active.
+
+### Loom layout
+
+Matches loompy's layout exactly (genes × cells): a float32 `matrix` (sum of all layers), `layers/{spliced,unspliced,ambiguous}` (`uint32` by default), and `row_attrs` / `col_attrs` string datasets including `Gene`, `Accession`, `Chromosome`, `Strand`, and `CellID`. This is byte-for-byte comparable to upstream velocyto.py output via `h5diff`.
+
+## Sample demultiplexing
+
+`--sample-tag` (generic `run` command only) lets a single multi-sample BAM be counted without `samtools split`. This is an extension beyond the v0.17.16 port — upstream velocyto expects one sample per BAM.
+
+```bash
+velocyto-rs run multiplexed.bam /ref/gencode.v42.gtf \
+    --bcfile barcodes.txt \
+    --sample-tag ST \
+    --sampleid pooled_run
+```
+
+- Cell identity becomes `(sample, barcode)`, so the same bead barcode in two samples no longer collides. CellIDs are formatted `{sampleid}_{sample}:{bc}` and a `SampleID` column (loom `col_attrs/SampleID`, h5ad `obs` column) is added.
+- The BAM is still sorted by `CB` only — no second sort, no split.
+- Reads missing the sample tag are dropped (not pooled into a phantom sample). Reads that carry the tag with any value (e.g. BD `"Multiplet"`) are kept as their own sample — filter them downstream via `SampleID`.
+- With `--sample-tag` off, output is byte-for-byte identical to before.
 
 
+## Citation
 
+If you use this software, cite the original velocyto paper:
 
-
+> La Manno G, Soldatov R, Zeisel A, Braun E, Hochgerner H, Petukhov V, Lidschreiber K, Kastriti ME, Lönnerberg P, Furlan A, Fan J, Borm LE, Liu Z, van Bruggen D, Guo J, He X, Barker R, Sundström E, Castelo-Branco G, Cramer P, Adameyko I, Linnarsson S, Kharchenko PV.  
+> **RNA velocity of single cells.**  
+> *Nature* 560, 494–498 (2018). https://doi.org/10.1038/s41586-018-0414-6
 
 
 ## License

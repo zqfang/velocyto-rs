@@ -21,6 +21,8 @@ BD Rhapsody single-cell RNA-seq data uses a non-standard, complex cell barcode s
 
 Measured with `/usr/bin/time -v` on the same machine, same input files, same barcodes file. Both tools produce identical count output (see Output correctness below). Python: velocyto.py v0.17.16, CPython 3.9. Rust: `cargo build --release --features bam`.
 
+> **Backend note:** the Rust numbers in the table below were measured with the original `rust-htslib` (C `htslib`) BAM backend. BAM/SAM reading has since moved to the pure-Rust [`noodles`](https://github.com/zaeleus/noodles) crates — see [BAM reader: noodles vs htslib](#bam-reader-noodles-vs-htslib), which re-baselines both backends on one machine. The Rust-vs-Python rows here are from a separate run and are indicative, not directly comparable to that same-machine table.
+
 | Dataset | Tool | Wall time | Peak RSS | Speed ratio | RAM ratio |
 |---|---|---|---|---|---|
 | `mini_chr21.bam`<br>(39 MB BAM, 16 MB GTF) | Python | 22.1 s | 390 MB | — | — |
@@ -31,6 +33,20 @@ Measured with `/usr/bin/time -v` on the same machine, same input files, same bar
 Hardware: Linux x86-64, single machine.
 
 The smaller RAM advantage on the large dataset is expected: the 1.5 GB GTF dominates RSS in both tools once read into memory. The speed advantage is consistent because Rust avoids Python's per-object allocation overhead and GIL contention during GTF parsing and BAM scanning.
+
+### BAM reader: noodles vs htslib
+
+BAM/SAM reading was migrated from `rust-htslib` (which links the C `htslib` library and needs `libclang` to build) to the pure-Rust [`noodles`](https://github.com/zaeleus/noodles) crates, removing the last C build dependency for `--features bam`. Re-baselined on one machine, same inputs, `samtools sort` skipped equally, both built `--release --features bam`; output is bit-for-bit identical.
+
+| Dataset | Metric | `rust-htslib` | `noodles` | Improvement |
+|---|---|---|---|---|
+| `mini_chr21`<br>(39 MB BAM, 16 MB GTF) | Wall time | 1.26 s | **0.76 s** | **1.7× faster** |
+| | Peak RSS | 24.6 MB | **18.5 MB** | **1.3× less** |
+| `s04`<br>(1.7 GB BAM, 1.5 GB GTF) | Wall time | 2 m 16 s | **1 m 54 s** | **1.2× faster** |
+| | Peak RSS | 3.75 GB | **3.68 GB** | ~2% less |
+| Release binary | Size | 93 MB | **59 MB** | **1.6× smaller** |
+
+The small-input win is larger because noodles decodes records lazily (only the fields you touch) with no C FFI boundary; on the large input the unchanged 1.5 GB GTF load dominates wall time and RSS, diluting the reader speedup. The smaller binary reflects no statically-linked C `htslib`.
 
 ### Output correctness
 

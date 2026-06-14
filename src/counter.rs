@@ -1,5 +1,5 @@
 //! Translated from velocyto/counter.py
-//! Core BAM counting pipeline. pysam → rust-htslib (behind "bam" feature).
+//! Core BAM counting pipeline. pysam → noodles (pure Rust, behind "bam" feature).
 
 use log::{debug, warn};
 use rand::Rng;
@@ -17,7 +17,11 @@ use crate::read::Read;
 use crate::transcript_model::TranscriptModel;
 
 #[cfg(feature = "bam")]
-use rust_htslib::bam::{self, Read as BamRead, Record};
+use noodles_bam as bam;
+#[cfg(feature = "bam")]
+use noodles_bam::Record;
+#[cfg(feature = "bam")]
+use noodles_sam::alignment::record::cigar::op::Kind;
 
 pub struct ExInCounter {
     pub sampleid: String,
@@ -131,35 +135,61 @@ impl ExInCounter {
     /// Python: _no_extension
     #[cfg(feature = "bam")]
     fn no_extension(&self, read: &Record) -> anyhow::Result<String> {
+        let umi_tag: [u8; 2] = self
+            .umibarcode_str
+            .as_bytes()
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("UMI tag {} must be 2 chars", self.umibarcode_str))?;
         let tag = read
-            .aux(self.umibarcode_str.as_bytes())
-            .map_err(|e| anyhow::anyhow!("UMI tag {} missing: {e}", self.umibarcode_str))?;
+            .data()
+            .get(&umi_tag)
+            .ok_or_else(|| anyhow::anyhow!("UMI tag {} missing", self.umibarcode_str))?
+            .map_err(|e| anyhow::anyhow!("UMI tag {} read error: {e}", self.umibarcode_str))?;
         Ok(aux_to_string(tag))
     }
 
     /// Python: _extension_Nbp
     #[cfg(feature = "bam")]
     fn extension_nbp(&self, read: &Record, nbp: usize) -> anyhow::Result<String> {
+        let umi_tag: [u8; 2] = self
+            .umibarcode_str
+            .as_bytes()
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("UMI tag {} must be 2 chars", self.umibarcode_str))?;
         let umi = aux_to_string(
-            read.aux(self.umibarcode_str.as_bytes())
-                .map_err(|e| anyhow::anyhow!("UMI tag {} missing: {e}", self.umibarcode_str))?,
+            read.data()
+                .get(&umi_tag)
+                .ok_or_else(|| anyhow::anyhow!("UMI tag {} missing", self.umibarcode_str))?
+                .map_err(|e| anyhow::anyhow!("UMI tag {} read error: {e}", self.umibarcode_str))?,
         );
-        let seq = read.seq();
-        let clip: String = (0..nbp.min(seq.len())).map(|i| seq[i] as char).collect();
+        let seq = read.sequence();
+        let clip: String = (0..nbp.min(seq.len()))
+            .filter_map(|i| seq.get(i))
+            .map(|b| b as char)
+            .collect();
         Ok(format!("{umi}{clip}"))
     }
 
     /// Python: _extension_Gene
     #[cfg(feature = "bam")]
     fn extension_gene(&self, read: &Record) -> anyhow::Result<String> {
+        let umi_tag: [u8; 2] = self
+            .umibarcode_str
+            .as_bytes()
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("UMI tag {} must be 2 chars", self.umibarcode_str))?;
         let umi = aux_to_string(
-            read.aux(self.umibarcode_str.as_bytes())
-                .map_err(|e| anyhow::anyhow!("UMI tag {} missing: {e}", self.umibarcode_str))?,
+            read.data()
+                .get(&umi_tag)
+                .ok_or_else(|| anyhow::anyhow!("UMI tag {} missing", self.umibarcode_str))?
+                .map_err(|e| anyhow::anyhow!("UMI tag {} read error: {e}", self.umibarcode_str))?,
         );
         let gx = read
-            .aux(b"GX")
+            .data()
+            .get(b"GX")
+            .and_then(|r| r.ok())
             .map(aux_to_string)
-            .unwrap_or_else(|_| "withoutGX".to_string());
+            .unwrap_or_else(|| "withoutGX".to_string());
         Ok(format!("{umi}_{gx}"))
     }
 
@@ -183,21 +213,46 @@ impl ExInCounter {
     /// Python: _extension_chr
     #[cfg(feature = "bam")]
     fn extension_chr(&self, read: &Record) -> anyhow::Result<String> {
+        let umi_tag: [u8; 2] = self
+            .umibarcode_str
+            .as_bytes()
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("UMI tag {} must be 2 chars", self.umibarcode_str))?;
         let umi = aux_to_string(
-            read.aux(self.umibarcode_str.as_bytes())
-                .map_err(|e| anyhow::anyhow!("UMI tag {} missing: {e}", self.umibarcode_str))?,
+            read.data()
+                .get(&umi_tag)
+                .ok_or_else(|| anyhow::anyhow!("UMI tag {} missing", self.umibarcode_str))?
+                .map_err(|e| anyhow::anyhow!("UMI tag {} read error: {e}", self.umibarcode_str))?,
         );
-        let rname = read.tid();
-        let rstart = read.pos() / 10_000_000;
+        // noodles reference_sequence_id mirrors htslib tid (htslib uses -1 when absent).
+        let rname = read
+            .reference_sequence_id()
+            .and_then(|r| r.ok())
+            .map(|id| id as i64)
+            .unwrap_or(-1);
+        // htslib pos() is 0-based; noodles alignment_start() is 1-based, so subtract 1.
+        let pos0 = read
+            .alignment_start()
+            .and_then(|r| r.ok())
+            .map(|p| p.get() as i64 - 1)
+            .unwrap_or(-1);
+        let rstart = pos0 / 10_000_000;
         Ok(format!("{umi}_{rname}:{rstart}"))
     }
 
     /// Python: _normal_cell_barcode_get
     #[cfg(feature = "bam")]
     fn normal_cell_barcode_get(&self, read: &Record) -> anyhow::Result<String> {
+        let cb_tag: [u8; 2] = self
+            .cellbarcode_str
+            .as_bytes()
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("CB tag {} must be 2 chars", self.cellbarcode_str))?;
         let tag = read
-            .aux(self.cellbarcode_str.as_bytes())
-            .map_err(|e| anyhow::anyhow!("CB tag {} missing: {e}", self.cellbarcode_str))?;
+            .data()
+            .get(&cb_tag)
+            .ok_or_else(|| anyhow::anyhow!("CB tag {} missing", self.cellbarcode_str))?
+            .map_err(|e| anyhow::anyhow!("CB tag {} read error: {e}", self.cellbarcode_str))?;
         let full = aux_to_string(tag);
         Ok(full.split('-').next().unwrap_or(&full).to_string())
     }
@@ -208,25 +263,33 @@ impl ExInCounter {
     #[cfg(feature = "bam")]
     pub fn peek(&mut self, bamfile: &str, lines: usize) -> anyhow::Result<()> {
         debug!("Peeking into {bamfile}");
-        let mut reader = bam::Reader::from_path(bamfile)
+        let mut reader = std::fs::File::open(bamfile)
+            .map(bam::io::Reader::new)
             .map_err(|e| anyhow::anyhow!("Cannot open BAM {bamfile}: {e}"))?;
+        reader
+            .read_header()
+            .map_err(|e| anyhow::anyhow!("Cannot read BAM header {bamfile}: {e}"))?;
         let mut cellranger = 0usize;
         let mut dropseq = 0usize;
         let mut failed = 0usize;
-        let mut rec = Record::new();
+        let mut rec = Record::default();
         let mut i = 0usize;
         loop {
-            match reader.read(&mut rec) {
-                Some(Ok(())) => {}
-                None => break,
-                Some(Err(e)) => return Err(anyhow::anyhow!("BAM read error: {e}")),
+            match reader.read_record(&mut rec) {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(e) => return Err(anyhow::anyhow!("BAM read error: {e}")),
             }
-            if rec.is_unmapped() {
+            if rec.flags().is_unmapped() {
                 continue;
             }
-            if rec.aux(b"CB").is_ok() && rec.aux(b"UB").is_ok() {
+            if rec.data().get(b"CB").is_some_and(|r| r.is_ok())
+                && rec.data().get(b"UB").is_some_and(|r| r.is_ok())
+            {
                 cellranger += 1;
-            } else if rec.aux(b"XC").is_ok() && rec.aux(b"XM").is_ok() {
+            } else if rec.data().get(b"XC").is_some_and(|r| r.is_ok())
+                && rec.data().get(b"XM").is_some_and(|r| r.is_ok())
+            {
                 dropseq += 1;
             } else {
                 warn!("Not found cell and umi barcode in entry {i} of the bam file");
@@ -254,25 +317,29 @@ impl ExInCounter {
     #[cfg(feature = "bam")]
     pub fn peek_umi_only(&mut self, bamfile: &str, lines: usize) -> anyhow::Result<()> {
         debug!("Peeking into {bamfile}");
-        let mut reader = bam::Reader::from_path(bamfile)
+        let mut reader = std::fs::File::open(bamfile)
+            .map(bam::io::Reader::new)
             .map_err(|e| anyhow::anyhow!("Cannot open BAM {bamfile}: {e}"))?;
+        reader
+            .read_header()
+            .map_err(|e| anyhow::anyhow!("Cannot read BAM header {bamfile}: {e}"))?;
         let mut cellranger = 0usize;
         let mut dropseq = 0usize;
         let mut failed = 0usize;
-        let mut rec = Record::new();
+        let mut rec = Record::default();
         let mut i = 0usize;
         loop {
-            match reader.read(&mut rec) {
-                Some(Ok(())) => {}
-                None => break,
-                Some(Err(e)) => return Err(anyhow::anyhow!("BAM read error: {e}")),
+            match reader.read_record(&mut rec) {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(e) => return Err(anyhow::anyhow!("BAM read error: {e}")),
             }
-            if rec.is_unmapped() {
+            if rec.flags().is_unmapped() {
                 continue;
             }
-            if rec.aux(b"UB").is_ok() {
+            if rec.data().get(b"UB").is_some_and(|r| r.is_ok()) {
                 cellranger += 1;
-            } else if rec.aux(b"XM").is_ok() {
+            } else if rec.data().get(b"XM").is_some_and(|r| r.is_ok()) {
                 dropseq += 1;
             } else {
                 warn!("Not found umi barcode in entry {i} of the bam file");
@@ -883,55 +950,90 @@ impl ExInCounter {
         let mut currchrom = String::new();
         let mut set_chromosomes_seen: HashSet<String> = HashSet::new();
 
-        let mut reader = bam::Reader::from_path(bamfile)
+        let mut reader = std::fs::File::open(bamfile)
+            .map(bam::io::Reader::new)
             .map_err(|e| anyhow::anyhow!("Cannot open BAM {bamfile}: {e}"))?;
-        let header = reader.header().clone();
-        let mut rec = Record::new();
+        let header = reader
+            .read_header()
+            .map_err(|e| anyhow::anyhow!("Cannot read BAM header {bamfile}: {e}"))?;
+        let mut rec = Record::default();
         let mut i = 0usize;
 
         loop {
-            match reader.read(&mut rec) {
-                Some(Ok(())) => {}
-                None => break,
-                Some(Err(e)) => return Err(anyhow::anyhow!("BAM read error: {e}")),
+            match reader.read_record(&mut rec) {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(e) => return Err(anyhow::anyhow!("BAM read error: {e}")),
             }
             i += 1;
             if i % 10_000_000 == 0 {
                 debug!("Read first {} million reads", i / 1_000_000);
             }
-            if rec.is_unmapped() {
+            if rec.flags().is_unmapped() {
                 continue;
             }
-            if !multimap && rec.aux(b"NH").map(aux_to_i64).unwrap_or(1) != 1 {
+            if !multimap
+                && rec
+                    .data()
+                    .get(b"NH")
+                    .and_then(|r| r.ok())
+                    .map(aux_to_i64)
+                    .unwrap_or(1)
+                    != 1
+            {
                 continue;
             }
             if self.filter_mode {
-                let bc_raw = aux_to_string(
-                    rec.aux(self.cellbarcode_str.as_bytes())
-                        .unwrap_or(rust_htslib::bam::record::Aux::String("")),
-                );
+                let cb_tag: [u8; 2] = self.cellbarcode_str.as_bytes().try_into().map_err(|_| {
+                    anyhow::anyhow!("CB tag {} must be 2 chars", self.cellbarcode_str)
+                })?;
+                let bc_raw = rec
+                    .data()
+                    .get(&cb_tag)
+                    .and_then(|r| r.ok())
+                    .map(aux_to_string)
+                    .unwrap_or_default();
                 let bc = bc_raw.split('-').next().unwrap_or("").to_string();
                 if !self.valid_bcset.contains(&bc) {
                     continue;
                 }
             }
 
-            let chrom_raw = header.tid2name(rec.tid() as u32);
-            let chrom = normalize_chrom(std::str::from_utf8(chrom_raw).unwrap_or(""));
-            let strand = if rec.is_reverse() { '-' } else { '+' };
-            let pos = rec.pos() + 1;
+            let tid = match rec.reference_sequence_id() {
+                Some(Ok(id)) => id,
+                _ => continue,
+            };
+            let chrom_bytes: &[u8] = match header.reference_sequences().get_index(tid) {
+                Some((name, _)) => name.as_ref(),
+                None => continue,
+            };
+            let chrom = normalize_chrom(std::str::from_utf8(chrom_bytes).unwrap_or(""));
+            let strand = if rec.flags().is_reverse_complemented() {
+                '-'
+            } else {
+                '+'
+            };
+            // noodles alignment_start() is 1-based, matching the old htslib `pos() + 1`.
+            let pos = match rec.alignment_start() {
+                Some(Ok(p)) => p.get() as i64,
+                _ => continue,
+            };
 
             let cigar: Vec<(u32, u32)> = rec
                 .cigar()
                 .iter()
-                .map(|c| match c {
-                    bam::record::Cigar::Match(l) => (0u32, *l),
-                    bam::record::Cigar::Ins(l) => (1u32, *l),
-                    bam::record::Cigar::Del(l) => (2u32, *l),
-                    bam::record::Cigar::RefSkip(l) => (3u32, *l),
-                    bam::record::Cigar::SoftClip(l) => (4u32, *l),
-                    bam::record::Cigar::HardClip(l) => (5u32, *l),
-                    other => (255u32, other.len()),
+                .filter_map(|op| op.ok())
+                .map(|op| {
+                    let l = op.len() as u32;
+                    match op.kind() {
+                        Kind::Match => (0u32, l),
+                        Kind::Insertion => (1u32, l),
+                        Kind::Deletion => (2u32, l),
+                        Kind::Skip => (3u32, l),
+                        Kind::SoftClip => (4u32, l),
+                        Kind::HardClip => (5u32, l),
+                        _ => (255u32, l),
+                    }
                 })
                 .collect();
             let (segments, ref_skipped, clip5, clip3) = Self::parse_cigar_tuple(&cigar, pos);
@@ -1096,10 +1198,13 @@ impl ExInCounter {
         let mut nth = 0usize;
         let mut no_sample_tag_count = 0usize;
 
-        let mut reader = bam::Reader::from_path(bamfile)
+        let mut reader = std::fs::File::open(bamfile)
+            .map(bam::io::Reader::new)
             .map_err(|e| anyhow::anyhow!("Cannot open BAM {bamfile}: {e}"))?;
-        let header = reader.header().clone();
-        let mut rec = Record::new();
+        let header = reader
+            .read_header()
+            .map_err(|e| anyhow::anyhow!("Cannot read BAM header {bamfile}: {e}"))?;
+        let mut rec = Record::default();
 
         let mut pending_read: Option<Read> = None;
         let mut exhausted = false;
@@ -1111,18 +1216,26 @@ impl ExInCounter {
             } else {
                 let mut found = None;
                 loop {
-                    match reader.read(&mut rec) {
-                        Some(Ok(())) => {}
-                        None => {
+                    match reader.read_record(&mut rec) {
+                        Ok(0) => {
                             exhausted = true;
                             break;
                         }
-                        Some(Err(e)) => return Err(anyhow::anyhow!("BAM read error: {e}")),
+                        Ok(_) => {}
+                        Err(e) => return Err(anyhow::anyhow!("BAM read error: {e}")),
                     }
-                    if rec.is_unmapped() {
+                    if rec.flags().is_unmapped() {
                         continue;
                     }
-                    if !multimap && rec.aux(b"NH").map(aux_to_i64).unwrap_or(1) != 1 {
+                    if !multimap
+                        && rec
+                            .data()
+                            .get(b"NH")
+                            .and_then(|r| r.ok())
+                            .map(aux_to_i64)
+                            .unwrap_or(1)
+                            != 1
+                    {
                         continue;
                     }
                     let bc_res = if self.onefilepercell {
@@ -1155,13 +1268,18 @@ impl ExInCounter {
                     // noise), so it is dropped rather than pooled into a phantom
                     // sample-less cell. With demultiplexing off, `sample` is "".
                     let sample = match &self.sample_tag {
-                        Some(tag) => match rec.aux(tag.as_bytes()) {
-                            Ok(aux) => aux_to_string(aux),
-                            Err(_) => {
-                                no_sample_tag_count += 1;
-                                continue;
+                        Some(tag) => {
+                            let sample_tag: [u8; 2] = tag.as_bytes().try_into().map_err(|_| {
+                                anyhow::anyhow!("Sample tag {tag} must be 2 chars")
+                            })?;
+                            match rec.data().get(&sample_tag).and_then(|r| r.ok()) {
+                                Some(aux) => aux_to_string(aux),
+                                None => {
+                                    no_sample_tag_count += 1;
+                                    continue;
+                                }
                             }
-                        },
+                        }
                         None => String::new(),
                     };
                     if !self.valid_bcset.contains(&bc) {
@@ -1171,21 +1289,40 @@ impl ExInCounter {
                             self.valid_bcset.insert(bc.clone());
                         }
                     }
-                    let chrom_raw = header.tid2name(rec.tid() as u32);
-                    let chrom = normalize_chrom(std::str::from_utf8(chrom_raw).unwrap_or(""));
-                    let strand = if rec.is_reverse() { '-' } else { '+' };
-                    let pos = rec.pos() + 1;
+                    let tid = match rec.reference_sequence_id() {
+                        Some(Ok(id)) => id,
+                        _ => continue,
+                    };
+                    let chrom_bytes: &[u8] = match header.reference_sequences().get_index(tid) {
+                        Some((name, _)) => name.as_ref(),
+                        None => continue,
+                    };
+                    let chrom = normalize_chrom(std::str::from_utf8(chrom_bytes).unwrap_or(""));
+                    let strand = if rec.flags().is_reverse_complemented() {
+                        '-'
+                    } else {
+                        '+'
+                    };
+                    // noodles alignment_start() is 1-based, matching old htslib `pos() + 1`.
+                    let pos = match rec.alignment_start() {
+                        Some(Ok(p)) => p.get() as i64,
+                        _ => continue,
+                    };
                     let cigar: Vec<(u32, u32)> = rec
                         .cigar()
                         .iter()
-                        .map(|c| match c {
-                            bam::record::Cigar::Match(l) => (0u32, *l),
-                            bam::record::Cigar::Ins(l) => (1u32, *l),
-                            bam::record::Cigar::Del(l) => (2u32, *l),
-                            bam::record::Cigar::RefSkip(l) => (3u32, *l),
-                            bam::record::Cigar::SoftClip(l) => (4u32, *l),
-                            bam::record::Cigar::HardClip(l) => (5u32, *l),
-                            other => (255u32, other.len()),
+                        .filter_map(|op| op.ok())
+                        .map(|op| {
+                            let l = op.len() as u32;
+                            match op.kind() {
+                                Kind::Match => (0u32, l),
+                                Kind::Insertion => (1u32, l),
+                                Kind::Deletion => (2u32, l),
+                                Kind::Skip => (3u32, l),
+                                Kind::SoftClip => (4u32, l),
+                                Kind::HardClip => (5u32, l),
+                                _ => (255u32, l),
+                            }
                         })
                         .collect();
                     let (segments, ref_skipped, clip5, clip3) =
@@ -2158,25 +2295,25 @@ fn parse_gtf_fields(
 }
 
 #[cfg(feature = "bam")]
-fn aux_to_i64(aux: rust_htslib::bam::record::Aux) -> i64 {
-    use rust_htslib::bam::record::Aux;
+fn aux_to_i64(aux: noodles_sam::alignment::record::data::field::Value) -> i64 {
+    use noodles_sam::alignment::record::data::field::Value;
     match aux {
-        Aux::U8(v) => v as i64,
-        Aux::U16(v) => v as i64,
-        Aux::U32(v) => v as i64,
-        Aux::I8(v) => v as i64,
-        Aux::I16(v) => v as i64,
-        Aux::I32(v) => v as i64,
+        Value::UInt8(v) => v as i64,
+        Value::UInt16(v) => v as i64,
+        Value::UInt32(v) => v as i64,
+        Value::Int8(v) => v as i64,
+        Value::Int16(v) => v as i64,
+        Value::Int32(v) => v as i64,
         _ => 1,
     }
 }
 
 #[cfg(feature = "bam")]
-fn aux_to_string(aux: rust_htslib::bam::record::Aux) -> String {
-    use rust_htslib::bam::record::Aux;
+fn aux_to_string(aux: noodles_sam::alignment::record::data::field::Value) -> String {
+    use noodles_sam::alignment::record::data::field::Value;
     match aux {
-        Aux::String(s) => s.to_string(),
-        Aux::Char(c) => (c as char).to_string(),
+        Value::String(s) => s.to_string(),
+        Value::Character(c) => (c as char).to_string(),
         other => format!("{other:?}"),
     }
 }

@@ -117,8 +117,12 @@ fn correct_bam_barcodes(
     mapping: &HashMap<String, String>,
     corrected_output: Option<&str>,
 ) -> anyhow::Result<()> {
-    use rust_htslib::bam::record::Aux;
-    use rust_htslib::bam::{self, Read as BamRead};
+    use noodles_bam as bam;
+    use noodles_sam::alignment::io::Write as _;
+    use noodles_sam::alignment::record::data::field::Tag;
+    use noodles_sam::alignment::record_buf::data::field::Value;
+    use noodles_sam::alignment::RecordBuf;
+    use std::fs::File;
 
     let parent = bam_path.parent().unwrap_or(Path::new("."));
     let basename = bam_path.file_name().unwrap_or_default().to_string_lossy();
@@ -130,25 +134,41 @@ fn correct_bam_barcodes(
             .to_string(),
     };
 
-    let mut infile = bam::Reader::from_path(bam_path)
+    let mut infile = File::open(bam_path)
+        .map(bam::io::Reader::new)
         .with_context(|| format!("Opening BAM {}", bam_path.display()))?;
-    let header = bam::Header::from_template(infile.header());
-    let mut outfile = bam::Writer::from_path(&out_path, &header, bam::Format::Bam)
+    let header = infile
+        .read_header()
+        .with_context(|| format!("Reading BAM header {}", bam_path.display()))?;
+    let mut outfile = File::create(&out_path)
+        .map(bam::io::Writer::new)
         .with_context(|| format!("Creating BAM {out_path}"))?;
+    outfile
+        .write_header(&header)
+        .with_context(|| "Writing BAM header")?;
 
-    let mut record = bam::Record::new();
-    while let Some(result) = infile.read(&mut record) {
-        result.with_context(|| "Reading BAM record")?;
-        if let Ok(Aux::String(cb)) = record.aux(b"CB") {
-            if let Some(corrected) = mapping.get(cb) {
-                let _ = record.remove_aux(b"CB");
-                record
-                    .push_aux(b"CB", Aux::String(corrected))
-                    .with_context(|| "Setting CB tag")?;
-            }
+    // The lazy bam::Record is a near-zero-copy view; read into an owned
+    // RecordBuf so the CB tag can be rewritten before re-encoding.
+    let cb_tag = Tag::from([b'C', b'B']);
+    let mut record = RecordBuf::default();
+    while infile
+        .read_record_buf(&header, &mut record)
+        .with_context(|| "Reading BAM record")?
+        != 0
+    {
+        // Resolve the correction first so the immutable borrow of `record` ends
+        // before `data_mut()` takes a mutable borrow.
+        let corrected: Option<String> = match record.data().get(&cb_tag) {
+            Some(Value::String(cb)) => mapping.get(cb.to_string().as_str()).cloned(),
+            _ => None,
+        };
+        if let Some(corrected) = corrected {
+            record
+                .data_mut()
+                .insert(cb_tag, Value::String(corrected.into()));
         }
         outfile
-            .write(&record)
+            .write_alignment_record(&header, &record)
             .with_context(|| "Writing BAM record")?;
     }
     log::info!("Done. Corrected BAM at {out_path}");

@@ -2250,7 +2250,10 @@ pub fn normalize_chrom(chrom: &str) -> String {
     } else {
         chrom.to_string()
     };
-    if s.contains('_') {
+    // The '_' split targets UCSC scaffolds (chrN_ACCESSION_random/alt). BD Rhapsody
+    // antibody/SampleTag contigs are pipe-delimited and must be left intact, else e.g.
+    // `IgG|IGHG1_2_3_4|AHS0059|pAbO` -> "2" collides with chr2 and the sort check fails.
+    if s.contains('_') && !s.contains('|') {
         s.split('_').nth(1).unwrap_or(&s).to_string()
     } else {
         s

@@ -7,6 +7,8 @@
 )]
 
 pub mod analysis;
+#[cfg(feature = "bam")]
+pub mod bam_sort;
 pub mod commands;
 pub mod constants;
 pub mod counter;

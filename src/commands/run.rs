@@ -14,6 +14,14 @@ use crate::constants::BAM_COMPRESSION;
 use crate::counter::ExInCounter;
 use crate::logic::logic_from_name;
 
+/// Handle for one in-flight cell-barcode sort: either an external `samtools`
+/// subprocess or a pure-Rust sort running on a background thread.
+#[cfg(feature = "bam")]
+enum SortHandle {
+    Samtools(std::process::Child),
+    Rust(std::thread::JoinHandle<anyhow::Result<()>>),
+}
+
 /// Arguments for the generic `run` subcommand.
 ///
 /// Accepts one or more BAM files and a genome annotation GTF. All other
@@ -357,13 +365,33 @@ pub fn run_inner(
             .collect()
     };
 
-    // ── Launch samtools sort subprocesses ─────────────────────────────────────
-    let mut sorting_processes: Vec<Option<std::process::Child>> = Vec::new();
+    // ── Launch cell-barcode sorts ─────────────────────────────────────────────
+    // Prefer the external `samtools` binary when present (battle-tested);
+    // otherwise fall back to the pure-Rust disk-spilling sort so the pipeline
+    // has no hard runtime dependency on the samtools C binary.
+    let have_samtools = Command::new("samtools")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if have_samtools {
+        log::info!("samtools found on PATH; using it for cell-barcode sorting");
+    } else {
+        log::info!("samtools not found on PATH; using the pure-Rust cell-barcode sort");
+    }
+
+    let mut sorting_processes: Vec<Option<SortHandle>> = Vec::new();
     for (ni, bmf_cellsorted) in bamfile_cellsorted.iter().enumerate() {
         if Path::new(bmf_cellsorted).exists() {
             log::warn!("File {bmf_cellsorted} already exists; skipping sort.");
             sorting_processes.push(None);
-        } else {
+        } else if tagname == "NOTAG" {
+            // onefilepercell / without-umi: no cell-barcode grouping is needed
+            // (the input is consumed directly), so there is nothing to sort.
+            sorting_processes.push(None);
+        } else if have_samtools {
             log::info!(
                 "Starting samtools sort of {} → {bmf_cellsorted}",
                 bamfile[ni]
@@ -388,7 +416,21 @@ pub fn run_inner(
                 .stdout(Stdio::piped())
                 .spawn()
                 .with_context(|| "Failed to launch samtools sort")?;
-            sorting_processes.push(Some(child));
+            sorting_processes.push(Some(SortHandle::Samtools(child)));
+        } else {
+            log::info!(
+                "Starting pure-Rust cell-barcode sort of {} → {bmf_cellsorted}",
+                bamfile[ni]
+            );
+            let input = std::path::PathBuf::from(&bamfile[ni]);
+            let output = std::path::PathBuf::from(bmf_cellsorted);
+            let tag = tagname.clone();
+            let mb = mb_to_use;
+            let threads = threads_to_use;
+            let handle = std::thread::spawn(move || {
+                crate::bam_sort::sort_bam_by_tag(&input, &output, &tag, mb, threads)
+            });
+            sorting_processes.push(Some(SortHandle::Rust(handle)));
         }
     }
 
@@ -407,20 +449,30 @@ pub fn run_inner(
         exincounter.mark_up_introns(bmf, multimap)?;
     }
 
-    // ── Wait for samtools ─────────────────────────────────────────────────────
-    for (ni, child_opt) in sorting_processes.iter_mut().enumerate() {
-        if let Some(child) = child_opt {
-            let status = child.wait().with_context(|| "samtools sort wait failed")?;
-            if !status.success() {
-                bail!(
-                    "samtools sort of BAM #{ni} failed (exit {:?}). \
-                    Ensure samtools >= 1.6. Sort manually: \
-                    samtools sort -l {BAM_COMPRESSION} -m {mb_to_use}M -t {tagname} \
-                    -O BAM -@ {threads_to_use} -o cellsorted_<bam> <bam>",
-                    status.code()
-                );
+    // ── Wait for cell-barcode sorts ───────────────────────────────────────────
+    for (ni, handle_opt) in sorting_processes.into_iter().enumerate() {
+        match handle_opt {
+            Some(SortHandle::Samtools(mut child)) => {
+                let status = child.wait().with_context(|| "samtools sort wait failed")?;
+                if !status.success() {
+                    bail!(
+                        "samtools sort of BAM #{ni} failed (exit {:?}). \
+                        Ensure samtools >= 1.6. Sort manually: \
+                        samtools sort -l {BAM_COMPRESSION} -m {mb_to_use}M -t {tagname} \
+                        -O BAM -@ {threads_to_use} -o cellsorted_<bam> <bam>",
+                        status.code()
+                    );
+                }
+                log::info!("BAM #{ni} sorted successfully");
             }
-            log::info!("BAM #{ni} sorted successfully");
+            Some(SortHandle::Rust(handle)) => {
+                handle
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("cell-barcode sort thread #{ni} panicked"))?
+                    .with_context(|| format!("pure-Rust cell-barcode sort of BAM #{ni} failed"))?;
+                log::info!("BAM #{ni} sorted successfully");
+            }
+            None => {}
         }
     }
 

@@ -52,12 +52,15 @@ regex = "1"
 rand = "0.8"
 # Compile-time hash maps (for GEM_codes, CIGAR)
 phf = { version = "0.11", features = ["macros"] }
+# Temp spill files for the pure-Rust BAM tag sort (only needed with `bam`)
+tempfile = { version = "3", optional = true }
 
 [features]
-bam = ["dep:noodles-bam", "dep:noodles-sam", "dep:noodles-bgzf"]
-
-[dev-dependencies]
-tempfile = "3"
+# BAM/SAM I/O via the pure-Rust noodles crates. On by default since there is no
+# longer a C toolchain requirement (the old rust-htslib dependency is gone).
+# Build the dependency-light stub path with `cargo build --no-default-features`.
+default = ["bam"]
+bam = ["dep:noodles-bam", "dep:noodles-sam", "dep:noodles-bgzf", "dep:tempfile"]
 
 [profile.dev]
 opt-level = 0

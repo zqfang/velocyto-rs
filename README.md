@@ -75,12 +75,16 @@ The dominant cost for large reference genomes is loading the GTF annotation. Thr
 ## Build
 
 ```bash
-cargo build --release --features bam
+cargo build --release
 ```
+
+BAM support is **on by default** (pure-Rust [`noodles`](https://github.com/zaeleus/noodles) backend — no `libclang`, `htslib`, or any C library to build). Pass `--no-default-features` only if you want the dependency-light stub build without BAM support.
+
+> **No samtools required at runtime.** The cell-barcode sort uses the `samtools` binary when it is on `PATH`, but otherwise falls back to a built-in pure-Rust disk-spilling external merge sort (`src/bam_sort.rs`). It is output-equivalent to `samtools sort -t CB` (verified against a 28.4 M-read fixture: identical per-barcode read counts). So velocyto-rs has no hard dependency on samtools or any C library.
 
 ## Usage
 
-All subcommands require the `bam` feature (built in by default via `--features bam`). Run with `--help` for the full option list.
+BAM support is on by default — no extra feature flag is needed. Run with `--help` for the full option list.
 
 ### `run10x` — 10X Chromium (CellRanger output)
 
@@ -134,8 +138,8 @@ Key options:
 | `-M / --multimap` | false | Count non-uniquely mapped reads (not recommended) |
 | `-t / --dtype` | `uint32` | Layer array dtype; use `uint16` for low-depth data |
 | `--output-format` | `h5ad` | Output file format: `h5ad` (AnnData), `loom`, or `both` (see [Output formats](#output-formats)) |
-| `--samtools-threads` | 16 | Threads for `samtools sort` |
-| `--samtools-memory` | 2048 | MB per thread for `samtools sort` |
+| `--samtools-threads` | 16 | Sort threads — used by `samtools sort` if installed, else by the built-in pure-Rust sort |
+| `--samtools-memory` | 2048 | MB per sort thread / per in-memory sort chunk before spilling to disk |
 | `--cb-tag` | auto | BAM tag for cell barcode (e.g. `CB`, `XC`); skips auto-detection when both tags are set |
 | `--ub-tag` | auto | BAM tag for UMI barcode (e.g. `UB`, `XM`); skips auto-detection when both tags are set |
 | `--sample-tag` | — | BAM tag carrying sample identity (e.g. BD Rhapsody `ST`); demultiplexes a multi-sample BAM in place (see [Sample demultiplexing](#sample-demultiplexing)) |

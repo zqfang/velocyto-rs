@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Faithful Rust translation of velocyto.py v0.17.16 — RNA velocity analysis for single-cell RNA-seq"
 license = "BSD-2-Clause"
-authors = ["Linnarsson Lab"]
+authors = ["Zhuoqing Fang"]
 
 [[bin]]
 name = "velocyto-rs"

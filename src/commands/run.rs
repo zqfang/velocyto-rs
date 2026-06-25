@@ -588,6 +588,7 @@ pub fn run_inner(
 ///
 /// Falls back to 32 000 MB (≈ 32 GB) when `/proc/meminfo` is unavailable
 /// (non-Linux systems) or the field cannot be parsed.
+#[cfg(feature = "bam")]
 fn read_mem_available_mb() -> u64 {
     let Ok(f) = fs::File::open("/proc/meminfo") else {
         return 32000;
@@ -608,6 +609,7 @@ fn read_mem_available_mb() -> u64 {
 /// Count logical CPU cores by counting `processor` entries in `/proc/cpuinfo`.
 ///
 /// Falls back to 1 when `/proc/cpuinfo` is unavailable (non-Linux systems).
+#[cfg(feature = "bam")]
 fn num_cpus() -> usize {
     let Ok(f) = fs::File::open("/proc/cpuinfo") else {
         return 1;
@@ -625,6 +627,7 @@ fn num_cpus() -> usize {
 /// Only `"uint32"` (default, lossless) and `"uint16"` (narrower, saturates at
 /// 65535) are supported. Any other value — including typos like `"unit32"` —
 /// is rejected rather than silently coerced.
+#[cfg(feature = "bam")]
 fn validate_loom_dtype(dtype: &str) -> anyhow::Result<()> {
     if matches!(dtype, "uint16" | "uint32") {
         Ok(())
@@ -637,6 +640,7 @@ fn validate_loom_dtype(dtype: &str) -> anyhow::Result<()> {
 ///
 /// Only `"h5ad"` (default, AnnData), `"loom"`, and `"both"` are supported. Any
 /// other value is rejected rather than silently coerced.
+#[cfg(feature = "bam")]
 fn validate_output_format(format: &str) -> anyhow::Result<()> {
     if matches!(format, "h5ad" | "loom" | "both") {
         Ok(())

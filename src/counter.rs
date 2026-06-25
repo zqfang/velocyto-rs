@@ -1096,6 +1096,7 @@ impl ExInCounter {
     }
 
     /// Propagate is_validated from feature_indexes back to annotations_by_chrm_strand and tms_flat.
+    #[cfg(feature = "bam")]
     fn sync_validated_to_annotations(&mut self) {
         for (cs, fi) in &self.feature_indexes {
             if let Some(tmodels) = self.annotations_by_chrm_strand.get_mut(cs) {
@@ -1451,6 +1452,7 @@ impl ExInCounter {
     }
 
     /// Dispatch to stranded / non_stranded batch counting.
+    #[cfg(feature = "bam")]
     fn count_cell_batch_inner(
         &mut self,
         cell_batch: &HashSet<String>,
@@ -1468,6 +1470,7 @@ impl ExInCounter {
     }
 
     /// Python: _count_cell_batch_stranded
+    #[cfg(feature = "bam")]
     fn count_cell_batch_stranded_inner(
         &mut self,
         cell_batch: &HashSet<String>,
@@ -1529,6 +1532,7 @@ impl ExInCounter {
     }
 
     /// Python: _count_cell_batch_stranded_discordant
+    #[cfg(feature = "bam")]
     fn count_cell_batch_stranded_discordant_inner(
         &mut self,
         cell_batch: &HashSet<String>,
@@ -1578,6 +1582,7 @@ impl ExInCounter {
     }
 
     /// Python: _count_cell_batch_non_stranded
+    #[cfg(feature = "bam")]
     fn count_cell_batch_non_stranded_inner(
         &mut self,
         cell_batch: &HashSet<String>,
@@ -1633,6 +1638,7 @@ impl ExInCounter {
     }
 
     /// Shared finalization: run logic.count for each molitem, return layer columns.
+    #[cfg(feature = "bam")]
     fn finalize_batch(
         &self,
         cell_batch: &HashSet<String>,

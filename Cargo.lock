@@ -396,8 +396,9 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
 name = "hdf5-pure-rust"
-version = "0.3.5"
-source = "git+https://github.com/henriksson-lab/hdf5-pure-rs.git#3a9eb851e904367891326d576c09dc490c8a136d"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ad636fda8ba19cfae5f29c4a32bf5d746f9bf9681d1e282b2b2afe7b3dfee2e8"
 dependencies = [
  "bitflags",
  "crc32fast",
@@ -409,8 +410,9 @@ dependencies = [
 
 [[package]]
 name = "hdf5-pure-rust-derive"
-version = "0.3.5"
-source = "git+https://github.com/henriksson-lab/hdf5-pure-rs.git#3a9eb851e904367891326d576c09dc490c8a136d"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5564f679e68fc3b2107ed9d14507567386d6865840b354880e2624555c6e6e8f"
 dependencies = [
  "proc-macro2",
  "quote",

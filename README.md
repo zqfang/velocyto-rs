@@ -144,6 +144,105 @@ Key options:
 | `--ub-tag` | auto | BAM tag for UMI barcode (e.g. `UB`, `XM`); skips auto-detection when both tags are set |
 | `--sample-tag` | — | BAM tag carrying sample identity (e.g. BD Rhapsody `ST`); demultiplexes a multi-sample BAM in place (see [Sample demultiplexing](#sample-demultiplexing)) |
 
+## Library usage
+
+Besides the CLI, `velocyto-rs` can be used as a Rust library. Every CLI subcommand is a
+public function that takes an `Args` struct and runs the full pipeline — counting, then
+writing the output file(s) to disk — returning `anyhow::Result<()>`.
+
+> **Crate vs library name.** The package is `velocyto-rs`, but the library is imported as
+> **`velocyto`** (`[lib] name = "velocyto"`). Depend on `velocyto-rs`, write `use velocyto::...`.
+
+Add the dependency (not yet on crates.io — use a git dependency):
+
+```toml
+[dependencies]
+velocyto-rs = { git = "https://github.com/zqfang/velocyto-rs" }
+anyhow = "1"
+# BAM support is enabled by default. For the dependency-light stub build
+# (no BAM, commands error at runtime) use:
+# velocyto-rs = { git = "https://github.com/zqfang/velocyto-rs", default-features = false }
+```
+
+### `run10x` — 10X Chromium
+
+```rust
+use velocyto::commands::run10x::{run10x, Run10xArgs};
+
+fn main() -> anyhow::Result<()> {
+    run10x(Run10xArgs {
+        verbose: false,
+        samplefolder: "/data/cellranger/sample1".into(),
+        gtffile: "/ref/gencode.v42.gtf".into(),
+        metadatatable: None,
+        mask: None,                      // or Some("/ref/repeats.gtf".into())
+        logic: "Default".into(),
+        multimap: false,
+        samtools_threads: 16,
+        samtools_memory: 2048,
+        dtype: "uint32".into(),
+        output_format: "h5ad".into(),    // "h5ad" | "loom" | "both"
+        dump: "0".into(),
+        cb_tag: None,
+        ub_tag: None,
+    })?;
+    Ok(())
+}
+```
+
+This writes `/data/cellranger/sample1/velocyto/sample1.h5ad` as a side effect, exactly as the
+CLI does.
+
+### `run` — generic BAM (with sample demultiplexing)
+
+The generic entry point takes one or more BAMs and the full option set, including `sample_tag`
+for in-place demultiplexing (see [Sample demultiplexing](#sample-demultiplexing)):
+
+```rust
+use velocyto::commands::run::{run, RunArgs};
+
+fn main() -> anyhow::Result<()> {
+    run(RunArgs {
+        verbose: false,
+        bamfile: vec!["multiplexed.bam".into()],   // one or more BAMs, merged into one output
+        gtffile: "/ref/gencode.v42.gtf".into(),
+        bcfile: Some("barcodes.txt".into()),
+        outputfolder: Some("./results".into()),
+        sampleid: Some("pooled_run".into()),
+        metadatatable: None,
+        mask: None,
+        onefilepercell: false,
+        logic: "Default".into(),
+        without_umi: false,
+        umi_extension: "no".into(),                // "no" | "chr" | "Gene" | "Cluster" | "all"
+        multimap: false,
+        samtools_threads: 16,
+        samtools_memory: 2048,
+        dtype: "uint32".into(),
+        output_format: "h5ad".into(),
+        dump: "0".into(),
+        cb_tag: None,                              // e.g. Some("XC".into()) for non-10x BAMs
+        ub_tag: None,                              // e.g. Some("XM".into())
+        sample_tag: Some("ST".into()),             // None for single-sample BAMs
+    })?;
+    Ok(())
+}
+```
+
+The remaining subcommands follow the same shape:
+
+| Function | Args struct | Module |
+|---|---|---|
+| `run10x` | `Run10xArgs` | `velocyto::commands::run10x` |
+| `run` | `RunArgs` | `velocyto::commands::run` |
+| `run_dropest` | `RunDropestArgs` | `velocyto::commands::run_dropest` |
+| `run_smartseq2` | `RunSmartseq2Args` | `velocyto::commands::run_smartseq2` |
+| `dropest_bc_correct` | `DropestBcCorrectArgs` | `velocyto::commands::dropest_bc_correct` |
+
+> **Logging.** These functions do not configure a logger — the CLI sets one up in `main.rs`. To
+> see progress output (the `verbose` field only controls log *level*), initialize a logger in
+> your own code, e.g. `env_logger::builder().filter_level(log::LevelFilter::Info).init();`.
+
 ## Output formats
 
 `--output-format` is available on all four run commands (`run10x`, `run`, `run_dropest`, `run_smartseq2`) and accepts:
